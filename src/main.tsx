@@ -39,6 +39,13 @@ import {
   Trash2,
 } from "lucide-react";
 import "./style.css";
+import {
+  PlayerRoster,
+  ServerResources,
+  BackupDelete,
+  WorkspaceContent,
+  WorkspaceSettings,
+} from "./enhancements.js";
 type S = {
   id: string;
   name: string;
@@ -66,6 +73,7 @@ type J = {
   status: string;
   message: string;
   created: string;
+  payload?: { server?: { name: string } };
 };
 const pretty = (s: string) =>
   s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -353,10 +361,18 @@ function App() {
   const [toast, setToast] = useState("");
   const [failure, setFailure] = useState("");
   const [working, setWorking] = useState(false);
+  const workspace = useLoad<any>(
+    () =>
+      auth.data?.authenticated
+        ? api("/workspace/settings")
+        : Promise.resolve(null),
+    [auth.data?.authenticated],
+  );
+  const refreshMs = (workspace.data?.refreshSeconds || 5) * 1000;
   const servers = useLoad<S[]>(
     () => (auth.data?.authenticated ? api("/servers") : Promise.resolve([])),
-    [auth.data?.authenticated],
-    5000,
+    [auth.data?.authenticated, refreshMs],
+    refreshMs,
   );
   const system = useLoad<any>(
     () => (auth.data?.authenticated ? api("/system") : Promise.resolve(null)),
@@ -372,6 +388,14 @@ function App() {
     setToast(s);
     setTimeout(() => setToast(""), 6000);
   };
+  useEffect(() => {
+    if (
+      selected &&
+      servers.data &&
+      !servers.data.some((s) => s.id === selected)
+    )
+      setSelected(null);
+  }, [selected, servers.data]);
   const act = async (fn: () => Promise<any>, message = "Saved") => {
     setWorking(true);
     setFailure("");
@@ -424,7 +448,9 @@ function App() {
     <div className="app">
       <aside className={mobile ? "open" : ""}>
         <Brand />
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">
+          {workspace.data?.name || "WORKSPACE"}
+        </div>
         <nav>
           {[
             [LayoutDashboard, "Dashboard"],
@@ -478,7 +504,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.0.2</span>
+            MK PANEL <span>v1.1.0</span>
           </small>
         </div>
       </aside>
@@ -572,6 +598,7 @@ function App() {
                 working={working || activeJobs.some((j) => j.serverId === s.id)}
                 notify={notify}
                 onDelete={() => setDeleting(s)}
+                refreshMs={refreshMs}
               />
             </>
           ) : (
@@ -647,37 +674,33 @@ function App() {
                 </div>
               )}
               {section === "Settings" ? (
-                <div className="panel prose">
-                  <h2>
-                    <Settings size={22} /> Workspace settings
-                  </h2>
-                  <p>
-                    Server data is kept on your CasaOS host. Each Minecraft
-                    server receives its own container, storage, and game port.
-                  </p>
-                  <dl>
-                    <dt>Host architecture</dt>
-                    <dd>{system.data?.architecture || "Unavailable"}</dd>
-                    <dt>Assigned Minecraft memory</dt>
-                    <dd>
-                      {system.data?.allocated || 0} GB (servers may be stopped)
-                    </dd>
-                    <dt>Administration</dt>
-                    <dd>One password-protected administrator</dd>
-                    <dt>Updates</dt>
-                    <dd>
-                      Use a tagged release from GitHub; back up your panel
-                      folder first.
-                    </dd>
-                  </dl>
-                  <a
-                    href="https://github.com/MKonline08/mk-minecraft-panel#installation-on-casaos"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Installation & recovery guide <ExternalLink size={14} />
-                  </a>
-                </div>
+                workspace.data ? (
+                  <WorkspaceSettings
+                    settings={workspace.data}
+                    system={system.data}
+                    onSaved={workspace.reload}
+                  />
+                ) : (
+                  <p>{workspace.error || "Loading settings…"}</p>
+                )
+              ) : ["Worlds", "Mods & Plugins", "Backups"].includes(section) ? (
+                <WorkspaceContent
+                  key={section}
+                  kind={
+                    section === "Worlds"
+                      ? "worlds"
+                      : section === "Backups"
+                        ? "backups"
+                        : "mods"
+                  }
+                  servers={servers.data || []}
+                  jobs={jobs.data || []}
+                  interval={refreshMs}
+                  open={open}
+                  changed={() => {
+                    void jobs.reload();
+                  }}
+                />
               ) : (
                 <>
                   <div className="section-heading">
@@ -699,6 +722,7 @@ function App() {
                       .map((server, i) => (
                         <ServerCard
                           key={server.id}
+                          onDelete={() => setDeleting(server)}
                           s={server}
                           i={i}
                           open={() =>
@@ -782,6 +806,7 @@ function App() {
                     <strong>
                       {pretty(j.kind)} ·{" "}
                       {servers.data?.find((s) => s.id === j.serverId)?.name ||
+                        j.payload?.server?.name ||
                         "Server"}
                     </strong>
                     <small>{j.message}</small>
@@ -804,6 +829,7 @@ function App() {
       )}
       {creating && (
         <CreateModal
+          defaults={workspace.data}
           onClose={() => setCreating(false)}
           onCreated={async (id) => {
             setCreating(false);
@@ -821,8 +847,9 @@ function App() {
           onDelete={async (name) => {
             await send("/servers/" + deleting.id, { name }, "DELETE");
             setDeleting(null);
-            setSelected(null);
-            notify("Server deleted");
+            notify(
+              "Server deletion started. Follow its progress in Recent activity.",
+            );
             await servers.reload();
             await jobs.reload();
           }}
@@ -854,12 +881,14 @@ function ServerCard({
   open,
   action,
   busy,
+  onDelete,
 }: {
   s: S;
   i: number;
   open: () => void;
   action: (s: string) => void;
   busy: boolean;
+  onDelete: () => void;
 }) {
   const running = ["running", "starting", "needs attention"].includes(s.status);
   return (
@@ -924,6 +953,12 @@ function ServerCard({
           <strong>{Math.round(s.cpu)}%</strong>
         </div>
         <div className="card-actions">
+          <details className="server-menu">
+            <summary aria-label={`Options for ${s.name}`}>•••</summary>
+            <button disabled={busy} className="danger-soft" onClick={onDelete}>
+              <Trash2 size={14} /> Delete server
+            </button>
+          </details>
           <button onClick={open}>
             <Terminal size={17} /> Manage
           </button>
@@ -941,9 +976,11 @@ function ServerCard({
   );
 }
 function CreateModal({
+  defaults,
   onClose,
   onCreated,
 }: {
+  defaults: any;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
@@ -952,7 +989,7 @@ function CreateModal({
     name: "",
     type: "PAPER",
     version: "1.21.1",
-    memory: 2,
+    memory: defaults?.defaultMemory || 2,
     eula: false,
     seed: "",
     motd: "§bMK Minecraft §8• §dYour next adventure",
@@ -1252,6 +1289,7 @@ type PageProps = {
   working: boolean;
   notify: (s: string) => void;
   onDelete: () => void;
+  refreshMs: number;
 };
 function ServerPage(p: PageProps) {
   const { s, tab, act, working, notify } = p;
@@ -1349,6 +1387,13 @@ function ServerPage(p: PageProps) {
             >
               <Square size={14} /> Stop
             </button>
+            <button
+              className="danger-soft"
+              disabled={working}
+              onClick={p.onDelete}
+            >
+              <Trash2 size={15} /> Delete server
+            </button>
           </div>
           <Field label="Join from your local network">
             <div className="copy-field">
@@ -1397,6 +1442,7 @@ function ServerPage(p: PageProps) {
           </dl>
         </section>
       </div>
+      <ServerResources server={s} interval={p.refreshMs} />
     </>
   );
 }
@@ -1452,116 +1498,120 @@ function ServerSettings({ s, act, working, onDelete }: PageProps) {
   const [memory, setMemory] = useState(s.memoryLimit);
   return (
     <div>
-    <form
-      className="panel"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void act(() =>
-          send("/servers/" + s.id + "/settings", { ...v, memory }, "PUT"),
-        );
-      }}
-    >
-      <h2>Gameplay settings</h2>
-      <p className="muted">
-        Stop the server before saving. Changes take effect on its next start.
-      </p>
-      <Field
-        label={`Server memory: ${memory} GB`}
-        hint="If a start fails for lack of RAM, try 1 GB for a small Vanilla server. Your world stays saved."
+      <form
+        className="panel"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void act(() =>
+            send("/servers/" + s.id + "/settings", { ...v, memory }, "PUT"),
+          );
+        }}
       >
-        <input
-          type="range"
-          min="1"
-          max="16"
-          value={memory}
-          onChange={(e) => setMemory(+e.target.value)}
-        />
-      </Field>
-      <div className="form-grid">
-        <Field label="Difficulty">
-          <select
-            value={v.difficulty}
-            onChange={(e) => setV({ ...v, difficulty: e.target.value })}
-          >
-            {["peaceful", "easy", "normal", "hard"].map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Game mode">
-          <select
-            value={v.gamemode}
-            onChange={(e) => setV({ ...v, gamemode: e.target.value })}
-          >
-            {["survival", "creative", "adventure", "spectator"].map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Maximum players">
+        <h2>Gameplay settings</h2>
+        <p className="muted">
+          Stop the server before saving. Changes take effect on its next start.
+        </p>
+        <Field
+          label={`Server memory: ${memory} GB`}
+          hint="If a start fails for lack of RAM, try 1 GB for a small Vanilla server. Your world stays saved."
+        >
           <input
-            type="number"
+            type="range"
             min="1"
-            max="1000"
-            value={v.maxPlayers}
-            onChange={(e) => setV({ ...v, maxPlayers: +e.target.value })}
+            max="16"
+            value={memory}
+            onChange={(e) => setMemory(+e.target.value)}
           />
         </Field>
-        <Field label="View distance (chunks)">
+        <div className="form-grid">
+          <Field label="Difficulty">
+            <select
+              value={v.difficulty}
+              onChange={(e) => setV({ ...v, difficulty: e.target.value })}
+            >
+              {["peaceful", "easy", "normal", "hard"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Game mode">
+            <select
+              value={v.gamemode}
+              onChange={(e) => setV({ ...v, gamemode: e.target.value })}
+            >
+              {["survival", "creative", "adventure", "spectator"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Maximum players">
+            <input
+              type="number"
+              min="1"
+              max="1000"
+              value={v.maxPlayers}
+              onChange={(e) => setV({ ...v, maxPlayers: +e.target.value })}
+            />
+          </Field>
+          <Field label="View distance (chunks)">
+            <input
+              type="number"
+              min="2"
+              max="32"
+              value={v.viewDistance}
+              onChange={(e) => setV({ ...v, viewDistance: +e.target.value })}
+            />
+          </Field>
+        </div>
+        <label className="check">
           <input
-            type="number"
-            min="2"
-            max="32"
-            value={v.viewDistance}
-            onChange={(e) => setV({ ...v, viewDistance: +e.target.value })}
-          />
-        </Field>
-      </div>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={v.pvp}
-          onChange={(e) => setV({ ...v, pvp: e.target.checked })}
-        />{" "}
-        Enable player combat (PvP)
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={v.whitelist}
-          onChange={(e) => setV({ ...v, whitelist: e.target.checked })}
-        />{" "}
-        Only allow whitelisted players
-      </label>
-      <button
-        className="primary"
-        disabled={working || !["stopped", "failed"].includes(s.status)}
-      >
-        Save settings
-      </button>
-    </form>
-    <section className="panel danger-zone">
-      <h2>Delete server</h2>
-      <p className="muted">
-        Permanently remove this server, its world, mods, images, and backups.
-        Download any backup you want to keep first.
-      </p>
-      <button
-        className="danger-soft"
-        type="button"
-        disabled={working || !["stopped", "failed"].includes(s.status)}
-        onClick={onDelete}
-      >
-        <Trash2 size={16} /> Delete server
-      </button>
-      {!["stopped", "failed"].includes(s.status) && (
-        <small className="muted">Stop the server before deleting it.</small>
-      )}
-    </section>
+            type="checkbox"
+            checked={v.pvp}
+            onChange={(e) => setV({ ...v, pvp: e.target.checked })}
+          />{" "}
+          Enable player combat (PvP)
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={v.whitelist}
+            onChange={(e) => setV({ ...v, whitelist: e.target.checked })}
+          />{" "}
+          Only allow whitelisted players
+        </label>
+        <button
+          className="primary"
+          disabled={working || !["stopped", "failed"].includes(s.status)}
+        >
+          Save settings
+        </button>
+      </form>
+      <section className="panel danger-zone">
+        <h2>Delete server</h2>
+        <p className="muted">
+          Permanently remove this server, its world, mods, images, and backups.
+          Download any backup you want to keep first.
+        </p>
+        <button
+          className="danger-soft"
+          type="button"
+          disabled={working}
+          onClick={onDelete}
+        >
+          <Trash2 size={16} /> Delete server
+        </button>
+        <small className="muted">
+          A running server will be stopped after you confirm.
+        </small>
+      </section>
     </div>
   );
 }
-function DeleteModal({ server, onClose, onDelete }: {
+function DeleteModal({
+  server,
+  onClose,
+  onDelete,
+}: {
   server: S;
   onClose: () => void;
   onDelete: (name: string) => Promise<void>;
@@ -1571,25 +1621,60 @@ function DeleteModal({ server, onClose, onDelete }: {
   const [error, setError] = useState("");
   return (
     <div className="modal-backdrop" role="presentation">
-      <div className="modal delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+      <div
+        className="modal delete-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-title"
+      >
         <div className="modal-top">
           <div className="eyebrow">PERMANENT ACTION</div>
-          <button className="icon-button" aria-label="Close" disabled={busy} onClick={onClose}><X size={18} /></button>
+          <button
+            className="icon-button"
+            aria-label="Close"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
         </div>
         <h1 id="delete-title">Delete {server.name}?</h1>
-        <p>This removes the Minecraft container and permanently deletes its world, mods, plugins, images, and backups. Download a backup first if you may need this server again.</p>
+        <p>
+          This stops the server and permanently deletes its world, mods,
+          plugins, images, and backups. Download a backup first if you may need
+          this server again. You can follow deletion progress in Recent
+          activity.
+        </p>
         <Field label={`Type ${server.name} to confirm`}>
-          <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" />
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoComplete="off"
+          />
         </Field>
         {error && <Notice error>{error}</Notice>}
         <div className="modal-actions">
-          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="danger-soft" type="button" disabled={busy || name !== server.name} onClick={async () => {
-            setBusy(true);
-            setError("");
-            try { await onDelete(name); }
-            catch (e: any) { setError(e.message); setBusy(false); }
-          }}><Trash2 size={16} /> {busy ? "Deleting…" : "Delete server permanently"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            className="danger-soft"
+            type="button"
+            disabled={busy || name !== server.name}
+            onClick={async () => {
+              setBusy(true);
+              setError("");
+              try {
+                await onDelete(name);
+              } catch (e: any) {
+                setError(e.message);
+                setBusy(false);
+              }
+            }}
+          >
+            <Trash2 size={16} />{" "}
+            {busy ? "Deleting…" : "Delete server permanently"}
+          </button>
         </div>
       </div>
     </div>
@@ -1755,18 +1840,21 @@ function Appearance({ s, act, working }: PageProps) {
     </div>
   );
 }
-function Players({ s, act, working }: PageProps) {
+function Players({ s, act, working, refreshMs }: PageProps) {
   const base = "/servers/" + s.id;
-  const p = useLoad<any>(() => api(base + "/players"), [s.id], 15000);
+  const p = useLoad<any>(
+    () => api(base + "/players"),
+    [s.id, refreshMs],
+    refreshMs,
+  );
   const [name, setName] = useState("");
   const [action, setAction] = useState("whitelist add");
   return (
     <div className="panel">
+      <PlayerRoster data={p.data} error={p.error} />
       <h2>
         <Users size={22} /> Players & permissions
       </h2>
-      {p.error && <Notice error>{p.error}</Notice>}
-      <p>{p.data?.online || "Loading…"}</p>
       <form
         className="inline-form"
         onSubmit={async (e) => {
@@ -1901,6 +1989,16 @@ function Backups({ s, act, working }: PageProps) {
             <button disabled={working} onClick={() => setRestore(b.name)}>
               Restore
             </button>
+            <BackupDelete
+              serverId={s.id}
+              serverName={s.name}
+              name={b.name}
+              disabled={working}
+              onDone={() => {
+                void act(async () => ({ ok: true }), "Backup deletion started");
+                void list.reload();
+              }}
+            />
           </div>
         ))}
         {!list.data?.length && (

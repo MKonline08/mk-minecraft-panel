@@ -30,6 +30,14 @@ import {
 } from "./core.js";
 import { minecraftVersions, javaFor, available, choices } from "./catalog.js";
 import { inspectJar, searchMods, resolveMods } from "./mods.js";
+import {
+  Storage,
+  ContentIndex,
+  backupList,
+  workspaceSettings,
+  workspaceSchema,
+} from "./workspace.js";
+import { PlayerTracker } from "./players.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 export async function createApp(
@@ -41,6 +49,21 @@ export async function createApp(
     options.engine || new Engine(root, process.env.HOST_DATA_DIR || root);
   const jobs = new Jobs(store, engine);
   if (options.scheduling === false) jobs.close();
+  const storage = new Storage(root);
+  const content = new ContentIndex(root);
+  const players = new PlayerTracker(
+    store,
+    engine,
+    options.scheduling !== false,
+  );
+  engine.onlineCount = (id) => {
+    const current = players.snapshots.get(id);
+    return current?.status === "ready" && Date.now() - current.fetchedAt < 15000
+      ? current.online.length
+      : null;
+  };
+  jobs.onChange = (id) => storage.invalidate(id);
+  jobs.beforeDelete = (id) => players.forget(id);
   const app = Fastify({
     logger: process.env.NODE_ENV !== "test",
     bodyLimit: 2 * 1024 * 1024,
@@ -131,7 +154,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.0.2" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.1.0" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -188,6 +211,91 @@ export async function createApp(
         .run(hash(req.cookies.mk_session));
     reply.clearCookie("mk_session", { path: "/" });
     return { ok: true };
+  });
+  app.get("/api/workspace/settings", async () => ({
+    ...workspaceSettings(store),
+    username: store.get("username"),
+  }));
+  app.put("/api/workspace/settings", async (req) => {
+    const settings = workspaceSchema.parse(req.body);
+    store.set("workspace", JSON.stringify(settings));
+    return settings;
+  });
+  app.put(
+    "/api/account",
+    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      const b = z
+        .object({
+          currentPassword: z.string().min(1).max(200),
+          username: credentials.shape.username,
+          password: credentials.shape.password.optional(),
+        })
+        .parse(req.body);
+      const [salt, digest] = store.get("password")!.split(":");
+      if (
+        !timingSafeEqual(
+          scryptSync(b.currentPassword, salt, 64),
+          Buffer.from(digest, "hex"),
+        )
+      )
+        throw new Error("Current password is incorrect");
+      if (b.password) {
+        const nextSalt = randomBytes(16).toString("hex");
+        store.set(
+          "password",
+          nextSalt + ":" + scryptSync(b.password, nextSalt, 64).toString("hex"),
+        );
+      }
+      store.set("username", b.username);
+      store.db.prepare("DELETE FROM sessions").run();
+      session(reply);
+      return { ok: true };
+    },
+  );
+  app.get("/api/workspace/content", async (req) => {
+    const kind = z
+      .enum(["worlds", "mods", "backups"])
+      .parse((req.query as any).kind);
+    const groups = [];
+    for (const s of store.servers()) {
+      const state = await engine
+        .state(s)
+        .catch(() => ({ status: "unavailable" }));
+      let items: any[] = [],
+        error = null;
+      try {
+        items =
+          kind === "worlds"
+            ? (await storage.get(s)).worlds
+            : kind === "mods"
+              ? await content.installed(s)
+              : await backupList(root, s);
+      } catch (e: any) {
+        error = e.message;
+      }
+      groups.push({
+        serverId: s.id,
+        serverName: s.name,
+        type: s.type,
+        status: state.status,
+        items,
+        error,
+      });
+    }
+    return { groups, updatedAt: new Date().toISOString() };
+  });
+  app.get("/api/servers/:id/storage", async (req) =>
+    storage.get(store.server((req.params as any).id)),
+  );
+  app.addHook("onResponse", async (req, reply) => {
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+      reply.statusCode < 400
+    ) {
+      const id = (req.params as any)?.id;
+      if (id) storage.invalidate(id);
+    }
   });
   app.get("/api/system", async () => {
     let info;
@@ -246,7 +354,11 @@ export async function createApp(
     Promise.all(store.servers().map(snapshot)),
   );
   app.post("/api/servers", async (req) => {
-    const b = createSchema.parse(req.body);
+    const workspaceDefaults = workspaceSettings(store);
+    const b = createSchema.parse({
+      memory: workspaceDefaults.defaultMemory,
+      ...(req.body as any),
+    });
     await engine.system();
     if (!(await available(b.type, b.version)))
       throw new Error(`No ${b.type} release is available for ${b.version}`);
@@ -292,8 +404,8 @@ export async function createApp(
       created: new Date().toISOString(),
       banner: false,
       icon: false,
-      backupHours: 0,
-      retention: 5,
+      backupHours: workspaceDefaults.defaultBackupHours,
+      retention: workspaceDefaults.defaultRetention,
       lastBackup: null,
       image: `itzg/minecraft-server:${IMAGE_RELEASE}-java${java}`,
     };
@@ -308,14 +420,7 @@ export async function createApp(
   );
   const target = (req: any) => store.server(req.params.id);
   const idle = (s: Server) => {
-    if (
-      store
-        .jobs()
-        .some(
-          (j) =>
-            j.serverId === s.id && ["running", "queued"].includes(j.status),
-        )
-    )
+    if (store.activeJob(s.id) || jobs.deleting.has(s.id))
       throw new Error("Wait for the current server operation to finish");
   };
   const stopped = async (s: Server) => {
@@ -329,26 +434,12 @@ export async function createApp(
     const { name } = z.object({ name: z.string() }).parse(req.body);
     if (name !== s.name)
       throw new Error("Type the server name exactly to confirm deletion");
-    if (jobs.deleting.has(s.id)) throw new Error("Deletion already in progress");
-    jobs.deleting.add(s.id);
-    try {
-      await stopped(s);
-      if (!/^[0-9a-f-]{36}$/i.test(s.id))
-        throw new Error("Invalid server ID; files were not deleted");
-      const folders = ["servers", "backups", "images"];
-      for (const folder of folders) await noSymlinks(root, `${folder}/${s.id}`);
-      const container = await engine.container(s);
-      if (container) await container.remove();
-      for (const folder of folders)
-        await fs.rm(path.join(root, folder, s.id), {
-          recursive: true,
-          force: true,
-        });
-      store.removeServer(s.id);
-      return { ok: true };
-    } finally {
-      jobs.deleting.delete(s.id);
-    }
+    idle(s);
+    if (!/^[0-9a-f-]{36}$/i.test(s.id))
+      throw new Error("Invalid server ID; files were not deleted");
+    for (const folder of ["servers", "backups", "images"])
+      await noSymlinks(root, `${folder}/${s.id}`);
+    return jobs.enqueue(s.id, "delete", { server: s });
   });
   app.post("/api/servers/:id/actions", async (req) => {
     const s = target(req);
@@ -382,9 +473,7 @@ export async function createApp(
         await fs.readFile(path.join(dir, name), "utf8").catch(() => "[]"),
       );
     return {
-      online: await engine
-        .command(s, "list")
-        .catch(() => "Server must be ready to list online players."),
+      ...(await players.get(s)),
       whitelist: await read("whitelist.json"),
       ops: await read("ops.json"),
     };
@@ -543,18 +632,16 @@ export async function createApp(
     }
   });
   app.get("/api/servers/:id/backups", async (req) => {
+    return backupList(root, target(req));
+  });
+  app.delete("/api/servers/:id/backup/:name", async (req) => {
     const s = target(req);
-    const dir = path.join(root, "backups", s.id);
-    const names = (await fs.readdir(dir).catch(() => []))
-      .filter((n) => n.endsWith(".zip"))
-      .sort()
-      .reverse();
-    return Promise.all(
-      names.map(async (name) => ({
-        name,
-        size: (await fs.stat(path.join(dir, name))).size,
-      })),
-    );
+    idle(s);
+    const name = safeName((req.params as any).name);
+    if (!name.endsWith(".zip")) throw new Error("Invalid backup");
+    const file = await noSymlinks(root, `backups/${s.id}/${name}`);
+    if (!(await fs.stat(file)).isFile()) throw new Error("Backup not found");
+    return jobs.enqueue(s.id, "delete-backup", { name });
   });
   app.put("/api/servers/:id/backups", async (req) => {
     const s = target(req);
@@ -571,9 +658,10 @@ export async function createApp(
   });
   app.post("/api/servers/:id/restore", async (req) => {
     const s = target(req);
+    idle(s);
     const name = safeName(z.object({ name: z.string() }).parse(req.body).name);
     if (!name.endsWith(".zip")) throw new Error("Invalid backup");
-    const file = path.join(root, "backups", s.id, name);
+    const file = await noSymlinks(root, `backups/${s.id}/${name}`);
     await fs.access(file);
     return jobs.enqueue(s.id, "restore", { file });
   });
@@ -584,7 +672,9 @@ export async function createApp(
     return reply
       .header("Content-Disposition", `attachment; filename="${name}"`)
       .type("application/zip")
-      .send(createReadStream(path.join(root, "backups", s.id, name)));
+      .send(
+        createReadStream(await noSymlinks(root, `backups/${s.id}/${name}`)),
+      );
   });
   app.get("/api/servers/:id/mods", async (req) => {
     const s = target(req);
@@ -660,7 +750,9 @@ export async function createApp(
   }
   app.addHook("onClose", async () => {
     jobs.close();
+    await players.close();
+    await jobs.drain();
     store.close();
   });
-  return { app, store, engine, jobs };
+  return { app, store, engine, jobs, storage, players };
 }

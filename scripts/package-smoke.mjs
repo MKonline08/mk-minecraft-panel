@@ -24,14 +24,35 @@ await api("/auth/setup", {
 const system = await api("/system");
 assert.equal(system.docker, true);
 assert.match(system.architecture, /amd64|x86_64/);
+await api(
+  "/workspace/settings",
+  {
+    name: "Package workspace",
+    refreshSeconds: 5,
+    defaultMemory: 1,
+    defaultBackupHours: 0,
+    defaultRetention: 7,
+  },
+  "PUT",
+);
 const { server } = await api("/servers", {
   name: "Package validation",
   type: "VANILLA",
   version: "1.21.1",
-  memory: 1,
   eula: true,
   autoStart: false,
 });
+assert.equal(server.memory, 1);
+assert.equal(server.retention, 7);
+async function waitJob(job) {
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const current = (await api("/jobs")).find((j) => j.id === job.id);
+    if (current?.status === "failed") throw new Error(current.message);
+    if (current?.status === "done") return;
+  }
+  throw new Error("Operation did not complete: " + job.kind);
+}
 let deleted = false;
 try {
   const job = await api(`/servers/${server.id}/actions`, { action: "start" });
@@ -52,20 +73,34 @@ try {
     command: "list",
   });
   assert.match(result.text, /players|online/i);
-  const stop = await api(`/servers/${server.id}/actions`, { action: "stop" });
-  let stopped = false;
-  for (let i = 0; i < 30; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const current = (await api("/jobs")).find((j) => j.id === stop.id);
-    if (current.status === "failed") throw new Error(current.message);
-    if (current.status === "done") { stopped = true; break; }
-  }
-  assert.ok(stopped, "Packaged server must stop before deletion");
-  await api(`/servers/${server.id}`, { name: server.name }, "DELETE");
+  assert.ok((await api(`/servers/${server.id}/storage`)).serverBytes > 0);
+  const players = await api(`/servers/${server.id}/players`);
+  assert.equal(players.status, "ready");
+  assert.equal(players.online.length, 0);
+  await waitJob(
+    await api(`/servers/${server.id}/actions`, { action: "backup" }),
+  );
+  const backups = await api(`/servers/${server.id}/backups`);
+  assert.equal(backups.length, 1);
+  await waitJob(
+    await api(
+      `/servers/${server.id}/backup/${encodeURIComponent(backups[0].name)}`,
+      undefined,
+      "DELETE",
+    ),
+  );
+  assert.equal((await api(`/servers/${server.id}/backups`)).length, 0);
+  assert.equal((await api(`/servers/${server.id}`)).status, "running");
+  await waitJob(
+    await api(`/servers/${server.id}`, { name: server.name }, "DELETE"),
+  );
   deleted = true;
-  assert.equal((await api("/servers")).some((s) => s.id === server.id), false);
+  assert.equal(
+    (await api("/servers")).some((s) => s.id === server.id),
+    false,
+  );
   console.log(
-    "PASS: packaged image creates, controls, stops and deletes a real Minecraft server through its authenticated API",
+    "PASS: packaged image applies defaults, reports players/storage, creates and deletes a backup, then stops and deletes a running server",
   );
 } finally {
   if (!deleted)

@@ -90,6 +90,226 @@ button.danger-soft {
   border-color: #6d3447;
   color: #ff9bab;
 }
+.player-roster {
+  margin-bottom: 32px;
+}
+.player-section {
+  padding: 20px 0;
+  border-bottom: 1px solid #29364e;
+}
+.player-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.player-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 13px;
+}
+.player-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 17px;
+  border: 1px solid #334360;
+  border-radius: 13px;
+  background: linear-gradient(140deg, #1d2a42, #151b2f);
+  min-width: 0;
+}
+.player-card strong,
+.player-card small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.player-card small {
+  color: #92a3c0;
+  font-size: 10px;
+  line-height: 1.8;
+}
+.pixel-avatar {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px #0004;
+}
+.player-status {
+  display: inline-block;
+  color: #9cabbd;
+  font-size: 11px;
+  margin: 5px 0;
+}
+.player-status.online {
+  color: #73edb7;
+}
+.player-status.online::before {
+  content: "●";
+  margin-right: 6px;
+}
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.resource-card {
+  display: grid;
+  gap: 11px;
+  padding: 22px;
+  background: linear-gradient(130deg, #1e2944, #141b30);
+  border: 1px solid #354263;
+  border-radius: 13px;
+}
+.resource-card svg {
+  color: #a991ff;
+}
+.resource-card small {
+  color: #a9b8d2;
+}
+.resource-card strong {
+  font-size: 23px;
+  overflow-wrap: anywhere;
+}
+.resource-note {
+  font-size: 11px;
+  margin: 12px 0 25px;
+}
+.content-toolbar {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.content-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.content-search input {
+  width: 100%;
+  min-width: 0;
+}
+.content-toolbar select {
+  width: auto;
+  min-width: 190px;
+}
+.content-group h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.content-items {
+  margin-top: 15px;
+}
+.content-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 0;
+  border-top: 1px solid #2d3a51;
+}
+.content-item > svg {
+  color: #a990ff;
+  flex-shrink: 0;
+}
+.content-details {
+  flex: 1;
+  min-width: 0;
+}
+.content-details strong {
+  overflow-wrap: anywhere;
+}
+.content-details small {
+  display: block;
+  margin-top: 6px;
+  color: #93a4c2;
+  font-size: 11px;
+}
+.content-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.item-badges {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.item-badges span {
+  font-size: 10px;
+  border: 1px solid #465070;
+  color: #c7b6ee;
+  border-radius: 20px;
+  padding: 3px 9px;
+}
+.enhanced-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #c7d5ed;
+  margin-bottom: 18px;
+}
+.enhanced-field input,
+.enhanced-field select {
+  width: 100%;
+}
+.server-menu {
+  position: relative;
+}
+.server-menu summary {
+  cursor: pointer;
+  padding: 8px;
+  list-style: none;
+  color: #b7c3dd;
+}
+.server-menu[open] > button {
+  position: absolute;
+  z-index: 5;
+  width: 155px;
+  left: 0;
+  bottom: 36px;
+}
+.workspace-label {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .resource-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .content-toolbar {
+    flex-direction: column;
+  }
+  .content-toolbar select {
+    width: 100%;
+  }
+  .content-item {
+    flex-wrap: wrap;
+  }
+  .content-actions {
+    width: 100%;
+  }
+  .player-roster .section-heading {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 15px;
+  }
+  .content-group .section-heading {
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .backup-list .list-row {
+    flex-wrap: wrap;
+  }
+  .backup-list .list-row strong {
+    overflow-wrap: anywhere;
+  }
+  .backup-list .list-row > div {
+    min-width: 0;
+  }
+}
 .danger-zone {
   border-color: #6d3447;
 }
@@ -295,6 +515,7 @@ nav button:hover {
   margin-top: 25px;
 }
 .main {
+  min-width: 0;
   margin-left: 232px;
   width: calc(100% - 232px);
 }

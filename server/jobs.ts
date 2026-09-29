@@ -4,20 +4,27 @@ import { randomUUID } from "node:crypto";
 import type { Store } from "./store.js";
 import type { Engine } from "./docker.js";
 import type { Job, Server } from "./core.js";
+import { noSymlinks, safeName } from "./core.js";
 import { extractZip, worldRoot, zipFolder } from "./archives.js";
 import { resolveMods, installMods } from "./mods.js";
 export class Jobs {
   active = false;
   closed = false;
   deleting = new Set<string>();
+  onChange: (id: string) => void = () => {};
+  beforeDelete: (id: string) => Promise<void> = async () => {};
   timer: NodeJS.Timeout;
   constructor(
     public store: Store,
     public engine: Engine,
   ) {
-    for (const j of store.jobs()) {
+    for (const j of store.unfinishedJobs()) {
       if (j.status === "running") {
-        if (["start", "restart", "stop"].includes(j.kind)) {
+        if (
+          ["start", "restart", "stop", "delete", "delete-backup"].includes(
+            j.kind,
+          )
+        ) {
           j.status = "queued";
           j.message = "Resuming after panel restart";
         } else {
@@ -38,16 +45,13 @@ export class Jobs {
     this.closed = true;
     clearInterval(this.timer);
   }
+  async drain() {
+    this.close();
+    while (this.active) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   enqueue(id: string, kind: string, payload: Record<string, unknown> = {}) {
-    if (this.deleting.has(id))
-      throw new Error("This server is being deleted");
-    if (
-      this.store
-        .jobs()
-        .some(
-          (j) => j.serverId === id && ["running", "queued"].includes(j.status),
-        )
-    )
+    if (this.deleting.has(id)) throw new Error("This server is being deleted");
+    if (this.store.activeJob(id))
       throw new Error("This server already has an operation in progress");
     const j = this.store.newJob(id, kind, payload);
     void this.tick();
@@ -55,10 +59,7 @@ export class Jobs {
   }
   async tick() {
     if (this.active || this.closed) return;
-    const j = this.store
-      .jobs()
-      .reverse()
-      .find((j) => j.status === "queued");
+    const j = this.store.unfinishedJobs().find((j) => j.status === "queued");
     if (!j) return;
     this.active = true;
     const progress = (m: string) => {
@@ -68,8 +69,42 @@ export class Jobs {
     try {
       j.status = "running";
       progress("Preparing operation");
-      const s = this.store.server(j.serverId);
+      const s =
+        j.kind === "delete"
+          ? (j.payload.server as Server)
+          : this.store.server(j.serverId);
       switch (j.kind) {
+        case "delete":
+          await this.removeServer(s, j.id, progress);
+          break;
+        case "delete-backup": {
+          const name = safeName(String(j.payload.name));
+          if (!name.endsWith(".zip")) throw new Error("Invalid backup");
+          progress("Deleting backup");
+          const file = await noSymlinks(
+            this.store.root,
+            `backups/${s.id}/${name}`,
+          );
+          await fs.rm(file, { force: true });
+          const names = (
+            await fs
+              .readdir(path.join(this.store.root, "backups", s.id))
+              .catch(() => [])
+          )
+            .filter((n) => n.endsWith(".zip"))
+            .sort()
+            .reverse();
+          const current = this.store.server(s.id);
+          current.lastBackup = names.length
+            ? (
+                await fs.stat(
+                  path.join(this.store.root, "backups", s.id, names[0]),
+                )
+              ).mtime.toISOString()
+            : null;
+          this.store.save(current);
+          break;
+        }
         case "start":
           await this.engine.start(s, progress);
           await this.engine.ready(s, progress);
@@ -113,8 +148,39 @@ export class Jobs {
       j.status = "failed";
       progress(e.message || "Operation failed");
     } finally {
+      this.onChange(j.serverId);
       this.active = false;
       if (!this.closed) void this.tick();
+    }
+  }
+  async removeServer(
+    s: Server,
+    jobId: string,
+    progress: (message: string) => void,
+  ) {
+    if (!s || !/^[0-9a-f-]{36}$/i.test(s.id))
+      throw new Error("Invalid server ID; files were not deleted");
+    this.deleting.add(s.id);
+    try {
+      for (const folder of ["servers", "backups", "images"])
+        await noSymlinks(this.store.root, `${folder}/${s.id}`);
+      await this.beforeDelete(s.id);
+      progress("Stopping server before deletion");
+      await this.engine.stop(s);
+      const container = await this.engine.container(s);
+      if (container) {
+        if ((await container.inspect()).State.Running)
+          throw new Error("Server did not stop. No files were deleted.");
+        await container.remove();
+      }
+      progress("Deleting server files and backups");
+      for (const folder of ["servers", "backups", "images"]) {
+        const target = await noSymlinks(this.store.root, `${folder}/${s.id}`);
+        await fs.rm(target, { recursive: true, force: true });
+      }
+      this.store.removeServer(s.id, jobId);
+    } finally {
+      this.deleting.delete(s.id);
     }
   }
   async backup(s: Server, progress: (s: string) => void, restart: boolean) {

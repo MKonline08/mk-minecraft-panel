@@ -10,6 +10,7 @@ export const IMAGE_RELEASE = "2026.9.2";
 const LABEL = "io.mk-panel.server";
 export class Engine {
   docker: Docker;
+  onlineCount?: (id: string) => number | null;
   constructor(
     public root: string,
     public hostRoot: string,
@@ -76,11 +77,14 @@ export class Engine {
           : "starting";
     let players: number | null = null;
     if (status === "running") {
-      try {
-        const response = await this.command(s, "list");
-        const match = /(?:There are|are) (\d+)/i.exec(response);
-        if (match) players = Number(match[1]);
-      } catch {}
+      if (this.onlineCount) players = this.onlineCount(s.id);
+      else {
+        try {
+          const response = await this.command(s, "list");
+          const match = /(?:There are|are) (\d+)/i.exec(response);
+          if (match) players = Number(match[1]);
+        } catch {}
+      }
     }
     return { status, memory, cpu, players };
   }
@@ -251,8 +255,22 @@ export class Engine {
     err.on("data", (b) => (text += b.toString()));
     this.docker.modem.demuxStream(stream, out, err);
     await new Promise<void>((resolve, reject) => {
-      stream.on("end", resolve);
-      stream.on("error", reject);
+      const timeout = setTimeout(() => {
+        stream.destroy();
+        reject(
+          new Error(
+            "Server command timed out; try again when Minecraft is ready",
+          ),
+        );
+      }, 15000);
+      stream.on("end", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      stream.on("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
     });
     if ((await exec.inspect()).ExitCode !== 0)
       throw new Error(text || "Command failed");

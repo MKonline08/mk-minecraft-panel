@@ -32,7 +32,15 @@ Minimum practical starting point: a 64-bit Intel/AMD laptop, working Docker/Casa
 - Modrinth project search and required dependencies, version/loader filtering, checksum verification, and client requirements. Upload JAR files with a compatibility review; enable or disable installed files while stopped.
 - Banner uploads automatically crop to 3:1; Minecraft icons convert to 64×64 PNG. Two-line MOTDs support Minecraft `§` formatting and preview colors. Restart to apply Minecraft MOTD/icon changes.
 - First-run password setup, scrypt password hashing, HTTP-only sessions, origin/request protection, login rate limiting, and server-specific Docker ownership checks.
-- Server deletion requires a stopped server and exact-name confirmation. It permanently removes that server's container, world, mods, images, backups, and job history; download any backup you want to retain first.
+- Player cards separate **Online now** from **Everyone who has joined**, with search and saved history. Background tracking polls every five seconds, recovers available player files and logs, and uses UUIDs when known. Username-cache entries alone are not treated as evidence of joining. Historical dates may be unknown, and log formats modified by plugins may not be recognized. Pixel avatars are generated locally, not downloaded player skins.
+- Workspace Worlds, Mods & Plugins, and Backups list their actual contents across servers, with search and server filters. Backups support individually confirmed deletion.
+- Server overview includes RAM in use, configured Java RAM, server-file size and separate backup storage. Folder measurements refresh every 60 seconds or after panel file operations; symbolic links are excluded.
+- Workspace Settings saves workspace name, display refresh frequency, administrator credentials and defaults for future servers. Account changes require the current password and sign other sessions out.
+- Delete server is available in Overview, Settings and the server-card options menu. Exact-name confirmation starts a tracked job that stops the server, then permanently removes its container, world, mods, images, backups and player history. Download backups you want to retain first. The deletion job itself remains as an activity record.
+
+![Player activity with demonstration players](docs/screenshots/players-desktop.png)
+
+![Workspace backups with demonstration content](docs/screenshots/workspace-backups-desktop.png)
 
 **Compatibility labels describe metadata, not a runtime guarantee.** Unknown JAR metadata is shown as Unknown. Forge/NeoForge ranges, loader-specific behavior and arbitrary mod interactions cannot all be validated before startup. Test unfamiliar mod combinations on a separate server and keep backups. Players may need matching mods in their Minecraft clients. Vanilla does not load plugins; Paper/Spigot/Purpur load plugins, while Fabric/Forge/NeoForge/Quilt load mods.
 
@@ -43,7 +51,7 @@ v1 intentionally excludes timed MOTD rotation, CurseForge integration, full modp
 All persistent panel data lives at `/DATA/AppData/mk-minecraft-panel` on Debian:
 
 ```text
-panel.sqlite         accounts, servers, jobs, schedules
+panel.sqlite         accounts, servers, jobs, schedules, player history, workspace settings
 servers/<id>/        each Minecraft server's files
 backups/<id>/        complete ZIP backups
 images/<id>/         dashboard banners and icons
@@ -53,11 +61,11 @@ staging/             temporary extraction and interrupted-operation recovery
 
 Keep `HOST_DATA_DIR` equal to the **host** path mounted as `/data`; sibling Minecraft containers need that path. Do not mount a named volume in its place. To move storage, stop all Minecraft containers and the panel, copy the complete folder to the new location, and update both the mount source and `HOST_DATA_DIR`.
 
-Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change the panel image version in CasaOS (for example `ghcr.io/mkonline08/mk-minecraft-panel:1.0.2`) and apply the update. Keep your existing host port and data mount; importing a fresh Compose file may restore the default port 8088. Server images are pinned to an itzg release and do not silently change with panel restarts.
+Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change only the panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.1.0` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Version 1.1 adds SQLite player-history tables automatically and preserves existing accounts and server settings. Server images are pinned to an itzg release and do not silently change with panel restarts.
 
 If an existing server cannot start due to a RAM warning, open that server's **Settings**, lower **Server memory**, save, and start it again. The stopped Docker container is recreated with the new heap size. Its world, mods, and settings remain in the persistent data folder.
 
-Jobs are persisted in SQLite. Start/stop/restart jobs resume after a panel restart. Interrupted file-changing operations are marked failed for review instead of blindly replayed; inspect preserved safety backups and any `staging/*-previous-*` folder before retrying. A failed backup may leave Minecraft stopped: inspect the job and restart it after fixing the cause. Backups contain server configuration and should be kept private. Automatic retention also applies to safety backups; copy any backup you need to keep indefinitely elsewhere.
+Jobs are persisted in SQLite. Start/stop/restart and explicitly confirmed deletion jobs resume after a panel restart. Other interrupted file-changing operations are marked failed for review; inspect preserved safety backups and any `staging/*-previous-*` folder before retrying. Failed server deletion can be retried from the same server after resolving the reported error; a failed stop does not delete files. A failed backup may leave Minecraft stopped: inspect the job and restart it after fixing the cause. Backups contain server configuration and should be kept private. Automatic retention also applies to safety backups; copy any backup you need to keep indefinitely elsewhere.
 
 If you lose the administrator password, stop the panel and keep a copy of `panel.sqlite`; use SQLite to delete the `password` and `username` rows from `settings` and clear `sessions`, then restart and claim setup on your trusted LAN. Do not delete the database: it contains your server registrations.
 
@@ -84,6 +92,8 @@ SERVER_TYPE=VANILLA npm run test:smoke
 ```
 
 API routes under `/api` require a session except health, login, setup, and auth status. Mutations require the `X-MK-Request: 1` header. Server operations return a persisted job; clients poll `/api/jobs`. `/api/servers`, `/api/catalog`, and `/api/system` supply the dashboard and wizard. Server-specific routes cover actions, logs, commands, players, settings, files, worlds, mods, images, and backups. The backend validates all inputs; browser controls are not security boundaries.
+
+Version 1.1 adds `GET/PUT /api/workspace/settings`, `PUT /api/account`, `GET /api/workspace/content?kind=worlds|mods|backups`, and `GET /api/servers/:id/storage`. Players now returns structured `online` and `history` arrays plus `status` and `updatedAt`; whitelist/operator fields and actions remain. `DELETE /api/servers/:id` and `DELETE /api/servers/:id/backup/:name` return persisted jobs rather than immediate deletion results.
 
 CI runs the production build, dependency audit, unit/API tests, desktop/mobile browser tests, and real Minecraft startup tests for all eight offered types at **1.21.1**. Vanilla, Paper, and Fabric also exercise concurrent servers and backup restoration. Successful tagged builds publish the image and Compose release. The version catalog checks upstream availability; it does not imply every historical version/mod combination was tested.
 
