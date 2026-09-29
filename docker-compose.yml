@@ -1,0 +1,51 @@
+name: mk-minecraft-panel
+services:
+  mk-panel:
+    image: ghcr.io/mkonline08/mk-minecraft-panel:1.0.0
+    restart: unless-stopped
+    ports:
+      - target: 8080
+        published: "8088"
+        protocol: tcp
+    environment:
+      DATA_DIR: /data
+      HOST_DATA_DIR: /DATA/AppData/mk-minecraft-panel
+    volumes:
+      - type: bind
+        source: /DATA/AppData/mk-minecraft-panel
+        target: /data
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    x-casaos:
+      envs:
+        - container: HOST_DATA_DIR
+          description:
+            en_us: Must match the host data volume path. Leave the default unless moving storage.
+      ports:
+        - container: "8080"
+          description:
+            en_us: MK web interface
+      volumes:
+        - container: /data
+          description:
+            en_us: Persistent worlds, backups and panel settings
+x-casaos:
+  architectures:
+    - amd64
+  main: mk-panel
+  author: MKonline08
+  category: Games
+  icon: https://raw.githubusercontent.com/MKonline08/mk-minecraft-panel/main/public/icon.svg
+  title:
+    en_us: MK Minecraft Panel
+  tagline:
+    en_us: Your worlds. Your rules.
+  description:
+    en_us: Create and manage Minecraft Java servers with mods, world uploads, backups, custom banners and colorful messages.
+  port_map: "8088"
+  scheme: http
+  index: /
+  tips:
+    before_install:
+      en_us: For Intel/AMD Debian systems. Import, install, then open port 8088 and create your administrator. The Docker socket lets this app manage Minecraft containers; keep the panel on your trusted home network.

@@ -1,0 +1,87 @@
+name: Verify and release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run build
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-results
+          path: |
+            test-results/
+            docs/screenshots/
+  minecraft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        type: [VANILLA, PAPER, FABRIC, SPIGOT, PURPUR, FORGE, NEOFORGE, QUILT]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:smoke
+        env:
+          SERVER_TYPE: ${{ matrix.type }}
+  package:
+    needs: [checks, minecraft]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: mk-panel:test
+      - name: Validate packaged application
+        run: |
+          docker compose config -q
+          docker run -d --name mk-package -p 8088:8080 mk-panel:test
+          for i in $(seq 1 30); do curl -fsS http://localhost:8088/api/health && break || sleep 2; done
+          curl -fsS http://localhost:8088/api/health
+          curl -fsS http://localhost:8088/ | grep 'MK Minecraft Panel'
+      - name: Publish versioned image
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          docker tag mk-panel:test ghcr.io/mkonline08/mk-minecraft-panel:$VERSION
+          docker push ghcr.io/mkonline08/mk-minecraft-panel:$VERSION
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" docker-compose.yml --title "MK Minecraft Panel $GITHUB_REF_NAME" --generate-notes
