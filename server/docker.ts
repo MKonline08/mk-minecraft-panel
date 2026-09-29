@@ -74,7 +74,15 @@ export class Engine {
         : i.State.Health?.Status === "unhealthy"
           ? "needs attention"
           : "starting";
-    return { status, memory, cpu, players: null };
+    let players: number | null = null;
+    if (status === "running") {
+      try {
+        const response = await this.command(s, "list");
+        const match = /(?:There are|are) (\d+)/i.exec(response);
+        if (match) players = Number(match[1]);
+      } catch {}
+    }
+    return { status, memory, cpu, players };
   }
   async configure(s: Server) {
     const dir = this.dir(s);

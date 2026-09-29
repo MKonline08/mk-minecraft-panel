@@ -56,6 +56,7 @@ type S = {
   backupHours: number;
   retention: number;
   lastBackup: string | null;
+  players?: number | null;
 };
 type J = {
   id: string;
@@ -889,6 +890,15 @@ function ServerCard({
                 "%",
             }}
           />
+        </div>
+        <div className="card-metrics minor">
+          <span>
+            <Users size={15} /> Players
+          </span>
+          <strong>
+            {s.players ?? (s.status === "stopped" ? 0 : "—")} /{" "}
+            {s.settings.maxPlayers}
+          </strong>
         </div>
         <div className="card-metrics minor">
           <span>

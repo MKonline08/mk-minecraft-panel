@@ -2,7 +2,9 @@
 
 Your worlds. Your rules. A self-hosted Minecraft **Java** server manager for CasaOS on an Intel/AMD Debian machine.
 
-![MK dashboard](docs/screenshots/dashboard-desktop.png)
+![MK dashboard with example servers](docs/screenshots/example-dashboard-desktop.png)
+
+Dashboard example uses clearly labeled demo servers; actual installations display live measurements.
 
 Create independent Vanilla, Paper, Spigot, Purpur, Fabric, Forge, NeoForge, and Quilt servers, upload worlds, discover version-filtered Modrinth mods, back up worlds, and customize each server's banner, icon, and colored message.
 

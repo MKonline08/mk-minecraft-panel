@@ -39,9 +39,11 @@ export async function javaFor(version: string) {
 export async function available(type: ServerType, version: string) {
   if (type === "VANILLA") return true;
   if (type === "PAPER")
-    return (
-      await json("https://api.papermc.io/v2/projects/paper")
-    ).versions.includes(version);
+    return Object.values(
+      (await json("https://fill.papermc.io/v3/projects/paper")).versions,
+    )
+      .flat()
+      .includes(version);
   if (type === "PURPUR")
     return (await json("https://api.purpurmc.org/v2/purpur")).versions.includes(
       version,

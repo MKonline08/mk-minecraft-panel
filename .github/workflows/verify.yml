@@ -70,10 +70,12 @@ jobs:
       - name: Validate packaged application
         run: |
           docker compose config -q
-          docker run -d --name mk-package -p 8088:8080 mk-panel:test
+          mkdir -p /tmp/mk-package-data
+          docker run -d --name mk-package -p 8088:8080 -e HOST_DATA_DIR=/tmp/mk-package-data -v /tmp/mk-package-data:/data -v /var/run/docker.sock:/var/run/docker.sock mk-panel:test
           for i in $(seq 1 30); do curl -fsS http://localhost:8088/api/health && break || sleep 2; done
           curl -fsS http://localhost:8088/api/health
           curl -fsS http://localhost:8088/ | grep 'MK Minecraft Panel'
+          node scripts/package-smoke.mjs
       - name: Publish versioned image
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
