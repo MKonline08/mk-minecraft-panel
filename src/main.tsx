@@ -171,12 +171,22 @@ function Field({
   children: React.ReactNode;
   hint?: string;
 }) {
+  const id = React.useId();
+  const control =
+    React.isValidElement(children) &&
+    typeof children.type === "string" &&
+    ["input", "select", "textarea"].includes(children.type)
+      ? React.cloneElement(children as React.ReactElement<any>, {
+          id,
+          "aria-describedby": hint ? id + "-hint" : undefined,
+        })
+      : children;
   return (
-    <label className="field">
-      <span>{label}</span>
-      {children}
-      {hint && <small>{hint}</small>}
-    </label>
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      {control}
+      {hint && <small id={id + "-hint"}>{hint}</small>}
+    </div>
   );
 }
 function Landscape({ variant = 0 }: { variant?: number }) {

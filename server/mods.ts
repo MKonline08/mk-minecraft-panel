@@ -123,7 +123,12 @@ export async function resolveMods(project: string, s: Server) {
     const p = await json(
       `https://api.modrinth.com/v2/project/${encodeURIComponent(id)}`,
     );
-    if (visited.has(p.id)) return;
+    if (visited.has(p.id)) {
+      const existing = items.find((i) => i.project === p.id);
+      if (versionId && existing && existing.version !== versionId)
+        throw new Error(`Conflicting required versions of ${p.title}`);
+      return;
+    }
     visited.add(p.id);
     const versions = versionId
       ? [
@@ -182,13 +187,31 @@ export async function installMods(items: any[], dir: string, s: Server) {
   const folder = path.join(dir, contentFolder(s.type));
   await fs.mkdir(folder, { recursive: true });
   const manifestPath = path.join(folder, ".mk-modrinth.json");
-  const installed = JSON.parse(
+  const recorded = JSON.parse(
     await fs.readFile(manifestPath, "utf8").catch(() => "[]"),
   );
+  const installed: any[] = [];
+  for (const row of recorded) {
+    if (
+      await fs
+        .access(path.join(folder, safeName(row.file)))
+        .then(() => true)
+        .catch(() => false)
+    )
+      installed.push(row);
+    else if (
+      await fs
+        .access(path.join(folder, safeName(row.file) + ".disabled"))
+        .then(() => true)
+        .catch(() => false)
+    )
+      installed.push({ ...row, disabled: true });
+  }
   for (const i of items) {
-    if (installed.some((x: any) => x.project === i.project))
+    const current = installed.find((x) => x.project === i.project);
+    if (current && (current.version !== i.version || current.disabled))
       throw new Error(
-        `${i.title} is already installed. Remove its JAR before changing versions.`,
+        `${i.title} is installed with a different version or disabled. Enable the matching version or use a separate server to change versions.`,
       );
     for (const dep of i.dependencies || [])
       if (
@@ -196,7 +219,16 @@ export async function installMods(items: any[], dir: string, s: Server) {
         installed.some((x: any) => x.project === dep.project_id)
       )
         throw new Error(`${i.title} conflicts with an installed mod`);
+    for (const existing of installed)
+      if (
+        (existing.dependencies || []).some(
+          (d: any) =>
+            d.dependency_type === "incompatible" && d.project_id === i.project,
+        )
+      )
+        throw new Error(`${i.title} conflicts with ${existing.title}`);
   }
+  items = items.filter((i) => !installed.some((x) => x.project === i.project));
   const downloaded = [];
   for (const i of items) {
     const url = new URL(i.file.url);

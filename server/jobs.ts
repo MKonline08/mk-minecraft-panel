@@ -129,6 +129,10 @@ export class Jobs {
       randomUUID().slice(0, 8) +
       ".zip";
     progress("Creating backup");
+    await fs.writeFile(
+      path.join(this.engine.dir(s), ".mk-settings.json"),
+      JSON.stringify({ settings: s.settings, motd: s.motd, seed: s.seed }),
+    );
     await zipFolder(this.engine.dir(s), path.join(folder, name));
     const current = this.store.server(s.id);
     current.lastBackup = new Date().toISOString();
@@ -175,14 +179,14 @@ export class Jobs {
       if (world) {
         progress("Installing world");
         await fs.mkdir(journal);
-        for (const name of ["world", "world_nether", "world_the_end"]) {
-          await fs
-            .rename(path.join(dir, name), path.join(journal, name))
-            .catch((e: any) => {
-              if (e.code !== "ENOENT") throw e;
-            });
-        }
         try {
+          for (const name of ["world", "world_nether", "world_the_end"]) {
+            await fs
+              .rename(path.join(dir, name), path.join(journal, name))
+              .catch((e: any) => {
+                if (e.code !== "ENOENT") throw e;
+              });
+          }
           await fs.rename(source, path.join(dir, "world"));
         } catch (e) {
           for (const name of await fs.readdir(journal))
@@ -194,8 +198,24 @@ export class Jobs {
         await fs.rename(dir, journal);
         try {
           await fs.rename(staging, dir);
+          const saved = JSON.parse(
+            await fs
+              .readFile(path.join(dir, ".mk-settings.json"), "utf8")
+              .catch(() => "{}"),
+          );
+          const current = this.store.server(s.id);
+          if (saved.settings) current.settings = saved.settings;
+          if (typeof saved.motd === "string") current.motd = saved.motd;
+          if (typeof saved.seed === "string") current.seed = saved.seed;
+          this.store.save(current);
         } catch (e) {
-          await fs.rename(journal, dir);
+          if (
+            !(await fs
+              .stat(dir)
+              .then(() => true)
+              .catch(() => false))
+          )
+            await fs.rename(journal, dir);
           throw e;
         }
       }

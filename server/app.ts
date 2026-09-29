@@ -57,16 +57,14 @@ export async function createApp(
   app.setErrorHandler((error, req, reply) => {
     const e = error as any;
     const status = e.statusCode || (e instanceof z.ZodError ? 400 : 400);
-    reply
-      .code(status >= 500 ? 500 : status)
-      .send({
-        error:
-          e instanceof z.ZodError
-            ? e.issues
-                .map((i: any) => `${i.path.join(".")}: ${i.message}`)
-                .join("; ")
-            : e.message || "Request failed",
-      });
+    reply.code(status >= 500 ? 500 : status).send({
+      error:
+        e instanceof z.ZodError
+          ? e.issues
+              .map((i: any) => `${i.path.join(".")}: ${i.message}`)
+              .join("; ")
+          : e.message || "Request failed",
+    });
   });
   const publicPaths = new Set([
     "/api/health",
@@ -82,7 +80,7 @@ export async function createApp(
       "Content-Security-Policy",
       "default-src 'self'; img-src 'self' data: https://cdn.modrinth.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
     );
-    const route = req.url.split("?")[0];
+    const route = req.routeOptions.url || req.url.split("?")[0];
     if (!route.startsWith("/api/")) return;
     reply.header("Cache-Control", "no-store");
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
@@ -236,14 +234,12 @@ export async function createApp(
   });
   const snapshot = async (s: Server) => ({
     ...s,
-    ...(await engine
-      .state(s)
-      .catch(() => ({
-        status: "unavailable",
-        memory: 0,
-        cpu: 0,
-        players: null,
-      }))),
+    ...(await engine.state(s).catch(() => ({
+      status: "unavailable",
+      memory: 0,
+      cpu: 0,
+      players: null,
+    }))),
     memoryLimit: s.memory,
   });
   app.get("/api/servers", async () =>
@@ -468,11 +464,13 @@ export async function createApp(
     const rel = String((req.query as any).path || "");
     if (!/\.(txt|json|yml|yaml|toml|properties|cfg|conf|log)$/.test(rel))
       throw new Error("Only text configuration files can be opened");
+    if (rel.split("/").some((p) => p.startsWith(".")))
+      throw new Error("Hidden files cannot be opened");
     const file = await noSymlinks(engine.dir(s), rel);
     if ((await fs.stat(file)).size > 1024 ** 2)
       throw new Error("File too large for the editor");
     const text = await fs.readFile(file, "utf8");
-    if (rel === "server.properties")
+    if (path.resolve(file) === path.resolve(engine.dir(s), "server.properties"))
       return {
         text: text.replace(/^rcon.password=.*$/gm, "rcon.password=[hidden]"),
         readOnly: true,

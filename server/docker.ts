@@ -45,9 +45,9 @@ export class Engine {
     const c = await this.container(s);
     if (!c) return { status: "stopped", memory: 0, cpu: 0, players: null };
     const i = await c.inspect();
-    if (!i.State.Running)
+    if (!i.State.Running || i.State.Restarting)
       return {
-        status: i.State.ExitCode ? "failed" : "stopped",
+        status: i.State.ExitCode || i.State.Restarting ? "failed" : "stopped",
         memory: 0,
         cpu: 0,
         players: null,
@@ -122,11 +122,13 @@ export class Engine {
     if (c) {
       const i = await c.inspect();
       if (i.State.Running) return;
+      await this.capacity(s);
       await this.configure(s);
       progress("Starting Minecraft");
       await c.start();
       return;
     }
+    await this.capacity(s);
     await this.ensurePort(s.port);
     await this.configure(s);
     progress(
@@ -148,8 +150,8 @@ export class Engine {
       `RCON_PASSWORD=${await this.password(s)}`,
       "OVERRIDE_SERVER_PROPERTIES=false",
       "ENABLE_ROLLING_LOGS=true",
-      "UID=0",
-      "GID=0",
+      `UID=${process.getuid?.() ?? 0}`,
+      `GID=${process.getgid?.() ?? 0}`,
     ];
     c = await this.docker.createContainer({
       name: "mk-" + s.id,
@@ -170,6 +172,24 @@ export class Engine {
     });
     progress("Starting Minecraft and generating the world");
     await c.start();
+  }
+  async capacity(s: Server) {
+    const info = await this.system();
+    const running = await this.docker.listContainers();
+    const limits = await Promise.all(
+      running.map(async (row) => {
+        const c = await this.docker.getContainer(row.Id).inspect();
+        return c.HostConfig.Memory || 0;
+      }),
+    );
+    const required = (s.memory * 1024 + 768) * 1024 ** 2;
+    if (
+      limits.reduce((n, m) => n + m, 0) + required + 512 * 1024 ** 2 >
+      info.memory
+    )
+      throw new Error(
+        "Not enough unreserved host RAM. Stop another server or create this server with less memory.",
+      );
   }
   async ready(s: Server, progress: (msg: string) => void) {
     for (let i = 0; i < 240; i++) {

@@ -796,7 +796,7 @@ footer {
   display: block;
   margin: 20px 0;
 }
-.field > span {
+.field > label {
   display: block;
   color: #b8c6df;
   font-size: 12px;
