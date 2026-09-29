@@ -1,7 +1,7 @@
 name: mk-minecraft-panel
 services:
   mk-panel:
-    image: ghcr.io/mkonline08/mk-minecraft-panel:1.0.0
+    image: ghcr.io/mkonline08/mk-minecraft-panel:1.0.1
     restart: unless-stopped
     ports:
       - target: 8080

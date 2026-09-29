@@ -159,6 +159,18 @@ test("populated dashboard, appearance editor and console render on desktop and p
   });
   await page.getByRole("button", { name: "Console", exact: true }).click();
   await expect(page.locator("pre.console")).toContainText("Done!");
+  let savedSettings: any;
+  await page.route("**/api/servers/example-fabric/settings", (route) => {
+    savedSettings = route.request().postDataJSON();
+    return route.fulfill({ json: examples[1] });
+  });
+  await page.getByRole("button", { name: "All servers" }).click();
+  await page.getByRole("button", { name: "Open Modded Adventure · Demo" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).last().click();
+  await expect(page.getByText("Server memory: 4 GB")).toBeVisible();
+  await page.getByRole("slider").fill("2");
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect.poll(() => savedSettings?.memory).toBe(2);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

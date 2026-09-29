@@ -61,6 +61,21 @@ try {
     ),
     "keep-me",
   );
+  if (type === "VANILLA") {
+    await engine.stop(server);
+    await engine.reconfigureMemory(server, 2);
+    server.memory = 2;
+    store.save(server);
+    await engine.start(server, log);
+    await engine.ready(server, log);
+    const inspected = await (await engine.container(server))!.inspect();
+    assert.equal(inspected.HostConfig.Memory, 2 * 1024 ** 3 + 768 * 1024 ** 2);
+    assert.ok(inspected.Config.Env?.includes("MEMORY=2G"));
+    assert.equal(
+      await fs.readFile(path.join(engine.dir(server), "mk-persistence.txt"), "utf8"),
+      "keep-me",
+    );
+  }
   if (["VANILLA", "PAPER", "FABRIC"].includes(type)) {
     await engine.start(second, log);
     await engine.ready(second, log);

@@ -183,21 +183,23 @@ export class Engine {
   }
   async capacity(s: Server) {
     const info = await this.system();
-    const running = await this.docker.listContainers();
-    const limits = await Promise.all(
-      running.map(async (row) => {
-        const c = await this.docker.getContainer(row.Id).inspect();
-        return c.HostConfig.Memory || 0;
-      }),
-    );
     const required = (s.memory * 1024 + 768) * 1024 ** 2;
-    if (
-      limits.reduce((n, m) => n + m, 0) + required + 512 * 1024 ** 2 >
-      info.memory
-    )
+    const reserve = 256 * 1024 ** 2;
+    if (required + reserve > info.memory)
       throw new Error(
-        "Not enough unreserved host RAM. Stop another server or create this server with less memory.",
+        `This server needs about ${((required + reserve) / 1024 ** 3).toFixed(1)} GB total, but this host reports ${(info.memory / 1024 ** 3).toFixed(1)} GB. Open Settings, lower Server memory, save, then start it again.`,
       );
+  }
+  async reconfigureMemory(s: Server, memory: number) {
+    if (memory === s.memory) return;
+    const c = await this.container(s);
+    if (!c) return;
+    const state = await c.inspect();
+    if (state.State.Running)
+      throw new Error("Stop the server before changing its memory");
+    // The world and configuration live in a separate bind-mounted folder.
+    // Recreating the stopped container lets its next start use the new JVM heap.
+    await c.remove();
   }
   async ready(s: Server, progress: (msg: string) => void) {
     for (let i = 0; i < 240; i++) {

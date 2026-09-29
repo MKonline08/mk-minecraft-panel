@@ -106,6 +106,31 @@ test("API authentication, origin protection, settings, image processing and file
     });
     assert.equal(r.statusCode, 200, r.body);
     assert.equal(store.server(s.id).settings.difficulty, "hard");
+    await fs.writeFile(
+      path.join(engine.dir(s), "world-marker.txt"),
+      "keep this world",
+    );
+    let removedContainer = false;
+    engine.container = async () =>
+      ({
+        inspect: async () => ({ State: { Running: false } }),
+        remove: async () => {
+          removedContainer = true;
+        },
+      }) as any;
+    r = await app.inject({
+      method: "PUT",
+      url: "/api/servers/test-server/settings",
+      headers,
+      payload: { ...defaults, difficulty: "hard", memory: 2 },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(removedContainer, true);
+    assert.equal(store.server(s.id).memory, 2);
+    assert.equal(
+      await fs.readFile(path.join(engine.dir(s), "world-marker.txt"), "utf8"),
+      "keep this world",
+    );
     r = await app.inject({
       url:
         "/api/servers/test-server/file?path=" +

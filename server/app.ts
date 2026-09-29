@@ -131,7 +131,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.0.0" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.0.1" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -382,7 +382,13 @@ export async function createApp(
   app.put("/api/servers/:id/settings", async (req) => {
     const s = target(req);
     await stopped(s);
-    s.settings = settingsSchema.parse(req.body);
+    const values = settingsSchema
+      .extend({ memory: z.number().int().min(1).max(64).optional() })
+      .parse(req.body);
+    const memory = values.memory ?? s.memory;
+    await engine.reconfigureMemory(s, memory);
+    s.memory = memory;
+    s.settings = settingsSchema.parse(values);
     store.save(s);
     await engine.configure(s);
     return s;

@@ -476,7 +476,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.0.0</span>
+            MK PANEL <span>v1.0.1</span>
           </small>
         </div>
       </aside>
@@ -1431,18 +1431,33 @@ function Console({ s, act, working }: PageProps) {
 }
 function ServerSettings({ s, act, working }: PageProps) {
   const [v, setV] = useState(s.settings);
+  const [memory, setMemory] = useState(s.memoryLimit);
   return (
     <form
       className="panel"
       onSubmit={(e) => {
         e.preventDefault();
-        void act(() => send("/servers/" + s.id + "/settings", v, "PUT"));
+        void act(() =>
+          send("/servers/" + s.id + "/settings", { ...v, memory }, "PUT"),
+        );
       }}
     >
       <h2>Gameplay settings</h2>
       <p className="muted">
         Stop the server before saving. Changes take effect on its next start.
       </p>
+      <Field
+        label={`Server memory: ${memory} GB`}
+        hint="If a start fails for lack of RAM, try 1 GB for a small Vanilla server. Your world stays saved."
+      >
+        <input
+          type="range"
+          min="1"
+          max="16"
+          value={memory}
+          onChange={(e) => setMemory(+e.target.value)}
+        />
+      </Field>
       <div className="form-grid">
         <Field label="Difficulty">
           <select

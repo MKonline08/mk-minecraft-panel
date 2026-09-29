@@ -52,7 +52,9 @@ staging/             temporary extraction and interrupted-operation recovery
 
 Keep `HOST_DATA_DIR` equal to the **host** path mounted as `/data`; sibling Minecraft containers need that path. Do not mount a named volume in its place. To move storage, stop all Minecraft containers and the panel, copy the complete folder to the new location, and update both the mount source and `HOST_DATA_DIR`.
 
-Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Import the newer tagged Compose release or change the image version in CasaOS. Preserve the data mount. Server images are pinned to an itzg release and do not silently change with panel restarts.
+Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change the panel image version in CasaOS (for example `ghcr.io/mkonline08/mk-minecraft-panel:1.0.1`) and apply the update. Keep your existing host port and data mount; importing a fresh Compose file may restore the default port 8088. Server images are pinned to an itzg release and do not silently change with panel restarts.
+
+If an existing server cannot start due to a RAM warning, open that server's **Settings**, lower **Server memory**, save, and start it again. The stopped Docker container is recreated with the new heap size. Its world, mods, and settings remain in the persistent data folder.
 
 Jobs are persisted in SQLite. Start/stop/restart jobs resume after a panel restart. Interrupted file-changing operations are marked failed for review instead of blindly replayed; inspect preserved safety backups and any `staging/*-previous-*` folder before retrying. A failed backup may leave Minecraft stopped: inspect the job and restart it after fixing the cause. Backups contain server configuration and should be kept private. Automatic retention also applies to safety backups; copy any backup you need to keep indefinitely elsewhere.
 
