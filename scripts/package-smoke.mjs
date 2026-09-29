@@ -5,7 +5,7 @@ async function api(url, body, method = body ? "POST" : "GET") {
   const r = await fetch(base + url, {
     method,
     headers: {
-      "Content-Type": "application/json",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       "X-MK-Request": "1",
       cookie,
     },
