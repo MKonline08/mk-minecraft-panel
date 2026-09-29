@@ -90,6 +90,18 @@ button.danger-soft {
   border-color: #6d3447;
   color: #ff9bab;
 }
+.danger-zone {
+  border-color: #6d3447;
+}
+.danger-zone button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.danger-zone small {
+  display: block;
+  margin-top: 10px;
+}
 button.ghost {
   background: none;
   border: 0;

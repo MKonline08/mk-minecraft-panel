@@ -36,6 +36,7 @@ import {
   Palette,
   Shield,
   LoaderCircle,
+  Trash2,
 } from "lucide-react";
 import "./style.css";
 type S = {
@@ -346,6 +347,7 @@ function App() {
   const [section, setSection] = useState("Dashboard");
   const [tab, setTab] = useState("Overview");
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<S | null>(null);
   const [mobile, setMobile] = useState(false);
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState("");
@@ -476,7 +478,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.0.1</span>
+            MK PANEL <span>v1.0.2</span>
           </small>
         </div>
       </aside>
@@ -569,6 +571,7 @@ function App() {
                 act={act}
                 working={working || activeJobs.some((j) => j.serverId === s.id)}
                 notify={notify}
+                onDelete={() => setDeleting(s)}
               />
             </>
           ) : (
@@ -808,6 +811,20 @@ function App() {
             await jobs.reload();
             setSelected(id);
             setTab("Overview");
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteModal
+          server={deleting}
+          onClose={() => setDeleting(null)}
+          onDelete={async (name) => {
+            await send("/servers/" + deleting.id, { name }, "DELETE");
+            setDeleting(null);
+            setSelected(null);
+            notify("Server deleted");
+            await servers.reload();
+            await jobs.reload();
           }}
         />
       )}
@@ -1234,6 +1251,7 @@ type PageProps = {
   act: (fn: () => Promise<any>, message?: string) => Promise<any>;
   working: boolean;
   notify: (s: string) => void;
+  onDelete: () => void;
 };
 function ServerPage(p: PageProps) {
   const { s, tab, act, working, notify } = p;
@@ -1429,10 +1447,11 @@ function Console({ s, act, working }: PageProps) {
     </div>
   );
 }
-function ServerSettings({ s, act, working }: PageProps) {
+function ServerSettings({ s, act, working, onDelete }: PageProps) {
   const [v, setV] = useState(s.settings);
   const [memory, setMemory] = useState(s.memoryLimit);
   return (
+    <div>
     <form
       className="panel"
       onSubmit={(e) => {
@@ -1521,6 +1540,59 @@ function ServerSettings({ s, act, working }: PageProps) {
         Save settings
       </button>
     </form>
+    <section className="panel danger-zone">
+      <h2>Delete server</h2>
+      <p className="muted">
+        Permanently remove this server, its world, mods, images, and backups.
+        Download any backup you want to keep first.
+      </p>
+      <button
+        className="danger-soft"
+        type="button"
+        disabled={working || !["stopped", "failed"].includes(s.status)}
+        onClick={onDelete}
+      >
+        <Trash2 size={16} /> Delete server
+      </button>
+      {!["stopped", "failed"].includes(s.status) && (
+        <small className="muted">Stop the server before deleting it.</small>
+      )}
+    </section>
+    </div>
+  );
+}
+function DeleteModal({ server, onClose, onDelete }: {
+  server: S;
+  onClose: () => void;
+  onDelete: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+        <div className="modal-top">
+          <div className="eyebrow">PERMANENT ACTION</div>
+          <button className="icon-button" aria-label="Close" disabled={busy} onClick={onClose}><X size={18} /></button>
+        </div>
+        <h1 id="delete-title">Delete {server.name}?</h1>
+        <p>This removes the Minecraft container and permanently deletes its world, mods, plugins, images, and backups. Download a backup first if you may need this server again.</p>
+        <Field label={`Type ${server.name} to confirm`}>
+          <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" />
+        </Field>
+        {error && <Notice error>{error}</Notice>}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="danger-soft" type="button" disabled={busy || name !== server.name} onClick={async () => {
+            setBusy(true);
+            setError("");
+            try { await onDelete(name); }
+            catch (e: any) { setError(e.message); setBusy(false); }
+          }}><Trash2 size={16} /> {busy ? "Deleting…" : "Delete server permanently"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 function UploadBox({

@@ -131,7 +131,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.0.1" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.0.2" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -324,6 +324,32 @@ export async function createApp(
     if (!["stopped", "failed"].includes(state.status))
       throw new Error("Stop the server before changing its files or settings");
   };
+  app.delete("/api/servers/:id", async (req) => {
+    const s = target(req);
+    const { name } = z.object({ name: z.string() }).parse(req.body);
+    if (name !== s.name)
+      throw new Error("Type the server name exactly to confirm deletion");
+    if (jobs.deleting.has(s.id)) throw new Error("Deletion already in progress");
+    jobs.deleting.add(s.id);
+    try {
+      await stopped(s);
+      if (!/^[0-9a-f-]{36}$/i.test(s.id))
+        throw new Error("Invalid server ID; files were not deleted");
+      const folders = ["servers", "backups", "images"];
+      for (const folder of folders) await noSymlinks(root, `${folder}/${s.id}`);
+      const container = await engine.container(s);
+      if (container) await container.remove();
+      for (const folder of folders)
+        await fs.rm(path.join(root, folder, s.id), {
+          recursive: true,
+          force: true,
+        });
+      store.removeServer(s.id);
+      return { ok: true };
+    } finally {
+      jobs.deleting.delete(s.id);
+    }
+  });
   app.post("/api/servers/:id/actions", async (req) => {
     const s = target(req);
     const b = z

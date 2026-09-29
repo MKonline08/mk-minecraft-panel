@@ -43,6 +43,17 @@ export class Store {
       .prepare("INSERT OR REPLACE INTO servers VALUES (?,?)")
       .run(s.id, JSON.stringify(s));
   }
+  removeServer(id: string) {
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM jobs WHERE json_extract(data, '$.serverId')=?").run(id);
+      this.db.prepare("DELETE FROM servers WHERE id=?").run(id);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   jobs(): Job[] {
     return (
       this.db

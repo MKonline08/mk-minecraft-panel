@@ -171,6 +171,23 @@ test("populated dashboard, appearance editor and console render on desktop and p
   await page.getByRole("slider").fill("2");
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect.poll(() => savedSettings?.memory).toBe(2);
+  let deleteName = "";
+  await page.route("**/api/servers/example-fabric", (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    deleteName = route.request().postDataJSON().name;
+    examples.splice(1, 1);
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.getByRole("button", { name: "Delete server", exact: true }).click();
+  const confirm = page.getByRole("button", { name: "Delete server permanently" });
+  await expect(confirm).toBeDisabled();
+  await page.getByLabel("Type Modded Adventure · Demo to confirm").fill("wrong");
+  await expect(confirm).toBeDisabled();
+  await page.getByLabel("Type Modded Adventure · Demo to confirm").fill("Modded Adventure · Demo");
+  await confirm.click();
+  await expect.poll(() => deleteName).toBe("Modded Adventure · Demo");
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Modded Adventure · Demo" })).toHaveCount(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

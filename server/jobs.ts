@@ -9,6 +9,7 @@ import { resolveMods, installMods } from "./mods.js";
 export class Jobs {
   active = false;
   closed = false;
+  deleting = new Set<string>();
   timer: NodeJS.Timeout;
   constructor(
     public store: Store,
@@ -38,6 +39,8 @@ export class Jobs {
     clearInterval(this.timer);
   }
   enqueue(id: string, kind: string, payload: Record<string, unknown> = {}) {
+    if (this.deleting.has(id))
+      throw new Error("This server is being deleted");
     if (
       this.store
         .jobs()
@@ -230,6 +233,7 @@ export class Jobs {
     try {
       for (const s of this.store.servers())
         if (
+          !this.deleting.has(s.id) &&
           s.backupHours &&
           Date.now() - Date.parse(s.lastBackup || s.created) >
             s.backupHours * 3600000 &&

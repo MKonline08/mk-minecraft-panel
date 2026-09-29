@@ -32,10 +32,11 @@ Minimum practical starting point: a 64-bit Intel/AMD laptop, working Docker/Casa
 - Modrinth project search and required dependencies, version/loader filtering, checksum verification, and client requirements. Upload JAR files with a compatibility review; enable or disable installed files while stopped.
 - Banner uploads automatically crop to 3:1; Minecraft icons convert to 64×64 PNG. Two-line MOTDs support Minecraft `§` formatting and preview colors. Restart to apply Minecraft MOTD/icon changes.
 - First-run password setup, scrypt password hashing, HTTP-only sessions, origin/request protection, login rate limiting, and server-specific Docker ownership checks.
+- Server deletion requires a stopped server and exact-name confirmation. It permanently removes that server's container, world, mods, images, backups, and job history; download any backup you want to retain first.
 
 **Compatibility labels describe metadata, not a runtime guarantee.** Unknown JAR metadata is shown as Unknown. Forge/NeoForge ranges, loader-specific behavior and arbitrary mod interactions cannot all be validated before startup. Test unfamiliar mod combinations on a separate server and keep backups. Players may need matching mods in their Minecraft clients. Vanilla does not load plugins; Paper/Spigot/Purpur load plugins, while Fabric/Forge/NeoForge/Quilt load mods.
 
-v1 intentionally excludes timed MOTD rotation, CurseForge integration, server deletion, full modpack import, public administration hosting, multiple admin roles, and automatic Minecraft version upgrades. To change a server's Minecraft version or loader, create a new instance and import a backup of its world only when compatible. Existing Modrinth-managed projects are not silently overwritten by an update.
+v1 intentionally excludes timed MOTD rotation, CurseForge integration, full modpack import, public administration hosting, multiple admin roles, and automatic Minecraft version upgrades. To change a server's Minecraft version or loader, create a new instance and import a backup of its world only when compatible. Existing Modrinth-managed projects are not silently overwritten by an update.
 
 ## Storage, updates, and recovery
 
@@ -52,7 +53,7 @@ staging/             temporary extraction and interrupted-operation recovery
 
 Keep `HOST_DATA_DIR` equal to the **host** path mounted as `/data`; sibling Minecraft containers need that path. Do not mount a named volume in its place. To move storage, stop all Minecraft containers and the panel, copy the complete folder to the new location, and update both the mount source and `HOST_DATA_DIR`.
 
-Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change the panel image version in CasaOS (for example `ghcr.io/mkonline08/mk-minecraft-panel:1.0.1`) and apply the update. Keep your existing host port and data mount; importing a fresh Compose file may restore the default port 8088. Server images are pinned to an itzg release and do not silently change with panel restarts.
+Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change the panel image version in CasaOS (for example `ghcr.io/mkonline08/mk-minecraft-panel:1.0.2`) and apply the update. Keep your existing host port and data mount; importing a fresh Compose file may restore the default port 8088. Server images are pinned to an itzg release and do not silently change with panel restarts.
 
 If an existing server cannot start due to a RAM warning, open that server's **Settings**, lower **Server memory**, save, and start it again. The stopped Docker container is recreated with the new heap size. Its world, mods, and settings remain in the persistent data folder.
 
