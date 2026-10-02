@@ -504,7 +504,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.1.0</span>
+            MK PANEL <span>v1.2.0</span>
           </small>
         </div>
       </aside>
@@ -2039,28 +2039,116 @@ function Files({ s, act, working }: PageProps) {
   const [folder, setFolder] = useState("");
   const [file, setFile] = useState("");
   const [text, setText] = useState("");
-  const [readOnly, setReadOnly] = useState(false);
+  const [original, setOriginal] = useState("");
+  const [reason, setReason] = useState("");
+  const [newName, setNewName] = useState("");
+  const [pending, setPending] = useState<File[]>([]);
+  const [progress, setProgress] = useState("");
   const list = useLoad<any[]>(
     () => api(base + "/files?path=" + encodeURIComponent(folder)),
     [s.id, folder],
   );
+  const inFolder = (name: string) => [folder, name].filter(Boolean).join("/");
+  const leaveEditor = () =>
+    text === original || window.confirm("Discard unsaved changes?");
+  const download = (name: string) =>
+    "/api" + base + "/file/download?path=" + encodeURIComponent(name);
+  const uploadFiles = async () => {
+    const replacements = pending.filter((f) =>
+      list.data?.some((e) => e.name === f.name),
+    );
+    if (
+      replacements.length &&
+      !window.confirm(
+        "Replace these files in " +
+          s.name +
+          " /" +
+          folder +
+          "?\n" +
+          replacements.map((f) => f.name).join("\n"),
+      )
+    )
+      return;
+    await act(async () => {
+      try {
+        for (const f of pending) {
+          await new Promise<void>((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open(
+              "POST",
+              "/api" +
+                base +
+                "/files/upload?path=" +
+                encodeURIComponent(folder) +
+                "&overwrite=" +
+                replacements.some((r) => r.name === f.name),
+            );
+            request.setRequestHeader("X-MK-Request", "1");
+            request.upload.onprogress = (e) =>
+              setProgress(
+                "Uploading " +
+                  f.name +
+                  (e.lengthComputable
+                    ? " · " + Math.round((e.loaded / e.total) * 100) + "%"
+                    : ""),
+              );
+            request.onerror = () =>
+              reject(new Error("Upload connection failed. Retry the file."));
+            request.onabort = () => reject(new Error("Upload cancelled"));
+            request.onload = () => {
+              if (request.status >= 200 && request.status < 300) {
+                setPending((items) => items.filter((item) => item !== f));
+                resolve();
+              } else {
+                let message = "Upload failed";
+                try {
+                  message = JSON.parse(request.responseText).error || message;
+                } catch {}
+                reject(new Error(f.name + ": " + message));
+              }
+            };
+            const form = new FormData();
+            form.append("file", f);
+            setProgress("Uploading " + f.name);
+            request.send(form);
+          });
+        }
+        return { ok: true };
+      } finally {
+        setProgress("");
+        await list.reload();
+      }
+    }, "Files uploaded");
+  };
   return (
     <div className="panel">
       <h2>
         <Folder size={22} /> Server files
       </h2>
       <p className="muted">
-        Edit text configuration while the server is stopped. Gameplay settings
-        are managed in the Settings tab.
+        Edit text files of any extension, including server.properties and hidden
+        files. Upload any file type into this folder. Restart Minecraft to apply
+        configuration changes.
       </p>
+      {!["stopped", "failed"].includes(s.status) && (
+        <Notice>
+          The server is running. Minecraft or a plugin may overwrite files it is
+          using; stop the server first when editing those files.
+        </Notice>
+      )}
       {list.error && <Notice error>{list.error}</Notice>}
       <div className="file-path">
         <button
+          aria-label="Parent folder"
+          disabled={!folder || working}
           onClick={() => {
+            if (!leaveEditor()) return;
             setFolder(folder.split("/").slice(0, -1).join("/"));
             setFile("");
+            setPending([]);
+            setText("");
+            setOriginal("");
           }}
-          disabled={!folder}
         >
           <ArrowLeft size={16} />
         </button>
@@ -2069,56 +2157,177 @@ function Files({ s, act, working }: PageProps) {
       {file ? (
         <>
           <h3>{file}</h3>
-          <textarea
-            className="file-editor"
-            aria-label="File contents"
-            readOnly={readOnly}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
+          {reason ? (
+            <Notice>{reason}</Notice>
+          ) : (
+            <textarea
+              className="file-editor"
+              aria-label="File contents"
+              spellCheck={false}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+            />
+          )}
+          {file === "server.properties" && (
+            <p className="muted">
+              Saved values survive startup, including online-mode. Changing
+              online-mode changes player identities and may make existing
+              inventories appear different. Port and RCON changes can affect
+              connections and panel controls.
+            </p>
+          )}
           <div className="button-row">
-            <button onClick={() => setFile("")}>Close file</button>
             <button
-              className="primary"
-              disabled={
-                readOnly || working || !["stopped", "failed"].includes(s.status)
-              }
-              onClick={() =>
-                act(() => send(base + "/file", { path: file, text }, "PUT"))
-              }
-            >
-              Save file
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="file-list">
-          {list.data?.map((e) => (
-            <button
-              className="file-row"
-              key={e.name}
-              onClick={async () => {
-                const next = [folder, e.name].filter(Boolean).join("/");
-                if (e.directory) setFolder(next);
-                else {
-                  const r = await act(
-                    () => api(base + "/file?path=" + encodeURIComponent(next)),
-                    "File opened",
-                  );
-                  if (r) {
-                    setFile(next);
-                    setText(r.text);
-                    setReadOnly(r.readOnly);
-                  }
+              disabled={working}
+              onClick={() => {
+                if (leaveEditor()) {
+                  setFile("");
+                  setText("");
+                  setOriginal("");
                 }
               }}
             >
-              {e.directory ? <Folder size={18} /> : <FileText size={18} />}
-              <span>{e.name}</span>
-              <ChevronRight size={16} />
+              Close file
             </button>
-          ))}
-        </div>
+            <a className="button" href={download(file)}>
+              Download file
+            </a>
+            {!reason && (
+              <button
+                className="primary"
+                disabled={working}
+                onClick={() =>
+                  act(async () => {
+                    const result = await send(
+                      base + "/file",
+                      { path: file, text },
+                      "PUT",
+                    );
+                    setOriginal(text);
+                    await list.reload();
+                    return result;
+                  }, "File saved. Restart Minecraft to apply configuration changes.")
+                }
+              >
+                Save file
+              </button>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="form-grid">
+            <Field label="Upload files">
+              <input
+                type="file"
+                multiple
+                disabled={working}
+                onChange={(e) => {
+                  setPending(Array.from(e.target.files || []));
+                  e.target.value = "";
+                }}
+              />
+            </Field>
+            <Field label="New file or folder name">
+              <input
+                value={newName}
+                disabled={working}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="config/example.conf"
+              />
+            </Field>
+          </div>
+          <div className="button-row">
+            <button
+              className="primary"
+              disabled={working || !pending.length}
+              onClick={uploadFiles}
+            >
+              Upload{" "}
+              {pending.length
+                ? pending.length + " file" + (pending.length === 1 ? "" : "s")
+                : "files"}
+            </button>
+            <button
+              disabled={working || !newName.trim()}
+              onClick={() =>
+                act(async () => {
+                  const name = inFolder(newName.trim());
+                  const result = await send(
+                    base + "/file",
+                    { path: name, text: "", overwrite: false },
+                    "PUT",
+                  );
+                  setNewName("");
+                  await list.reload();
+                  setFile(name);
+                  setText("");
+                  setOriginal("");
+                  setReason("");
+                  return result;
+                }, "File created")
+              }
+            >
+              Create file
+            </button>
+            <button
+              disabled={working || !newName.trim()}
+              onClick={() =>
+                act(async () => {
+                  const result = await send(base + "/files/folder", {
+                    path: inFolder(newName.trim()),
+                  });
+                  setNewName("");
+                  await list.reload();
+                  return result;
+                }, "Folder created")
+              }
+            >
+              Create folder
+            </button>
+          </div>
+          {pending.length > 0 && (
+            <p className="muted">{pending.map((f) => f.name).join(", ")}</p>
+          )}
+          {progress && <p role="status">{progress}</p>}
+          <div className="file-list">
+            {list.data?.map((e) => (
+              <button
+                className="file-row"
+                disabled={working}
+                key={e.name}
+                onClick={async () => {
+                  const next = inFolder(e.name);
+                  if (e.directory) {
+                    setFolder(next);
+                    setPending([]);
+                  } else {
+                    const r = await act(
+                      () =>
+                        api(base + "/file?path=" + encodeURIComponent(next)),
+                      "File opened",
+                    );
+                    if (r) {
+                      setFile(next);
+                      setText(r.text);
+                      setOriginal(r.text);
+                      setReason(r.readOnly ? r.reason : "");
+                    }
+                  }
+                }}
+              >
+                {e.directory ? <Folder size={18} /> : <FileText size={18} />}
+                <span>{e.name}</span>
+                <ChevronRight size={16} />
+              </button>
+            ))}
+            {list.data?.length === 0 && (
+              <p className="muted">
+                This folder is empty. Upload files or create one above.
+              </p>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

@@ -144,6 +144,28 @@ export function escapeProperty(v: unknown) {
       (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
     );
 }
+export function readProperties(text: string): Record<string, string> {
+  const result: Record<string, string> = Object.create(null);
+  const decode = (s: string) =>
+    s.replace(/\\u([0-9a-f]{4})|\\(.)/gi, (_, hex, char) =>
+      hex
+        ? String.fromCharCode(parseInt(hex, 16))
+        : (({ t: "\t", n: "\n", r: "\r", f: "\f" } as any)[char] ?? char),
+    );
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trimStart();
+    if (!line || /^[#!]/.test(line)) continue;
+    while (
+      (/\\+$/.exec(line)?.[0].length ?? 0) % 2 === 1 &&
+      i + 1 < lines.length
+    )
+      line = line.slice(0, -1) + lines[++i].trimStart();
+    const match = /^((?:\\.|[^\s=:])*)(?:\s*[=:]\s*|\s+)?(.*)$/.exec(line);
+    if (match) result[decode(match[1])] = decode(match[2]);
+  }
+  return result;
+}
 export function patchProperties(
   original: string,
   values: Record<string, unknown>,

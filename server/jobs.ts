@@ -11,6 +11,7 @@ export class Jobs {
   active = false;
   closed = false;
   deleting = new Set<string>();
+  fileMutations = new Set<string>();
   onChange: (id: string) => void = () => {};
   beforeDelete: (id: string) => Promise<void> = async () => {};
   timer: NodeJS.Timeout;
@@ -50,6 +51,8 @@ export class Jobs {
     while (this.active) await new Promise((resolve) => setTimeout(resolve, 25));
   }
   enqueue(id: string, kind: string, payload: Record<string, unknown> = {}) {
+    if (this.fileMutations.has(id))
+      throw new Error("Wait for the file operation to finish");
     if (this.deleting.has(id)) throw new Error("This server is being deleted");
     if (this.store.activeJob(id))
       throw new Error("This server already has an operation in progress");
@@ -300,6 +303,7 @@ export class Jobs {
       for (const s of this.store.servers())
         if (
           !this.deleting.has(s.id) &&
+          !this.fileMutations.has(s.id) &&
           s.backupHours &&
           Date.now() - Date.parse(s.lastBackup || s.created) >
             s.backupHours * 3600000 &&

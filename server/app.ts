@@ -26,6 +26,8 @@ import {
   contentFolder,
   noSymlinks,
   safeName,
+  properties,
+  readProperties,
   type Server,
 } from "./core.js";
 import { minecraftVersions, javaFor, available, choices } from "./catalog.js";
@@ -38,6 +40,7 @@ import {
   workspaceSchema,
 } from "./workspace.js";
 import { PlayerTracker } from "./players.js";
+import { EDITOR_LIMIT, decodeText, replaceFile } from "./files.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 export async function createApp(
@@ -154,7 +157,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.1.0" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.2.0" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -420,7 +423,11 @@ export async function createApp(
   );
   const target = (req: any) => store.server(req.params.id);
   const idle = (s: Server) => {
-    if (store.activeJob(s.id) || jobs.deleting.has(s.id))
+    if (
+      store.activeJob(s.id) ||
+      jobs.deleting.has(s.id) ||
+      jobs.fileMutations.has(s.id)
+    )
       throw new Error("Wait for the current server operation to finish");
   };
   const stopped = async (s: Server) => {
@@ -500,13 +507,24 @@ export async function createApp(
     const values = settingsSchema
       .extend({ memory: z.number().int().min(1).max(64).optional() })
       .parse(req.body);
-    const memory = values.memory ?? s.memory;
-    await engine.reconfigureMemory(s, memory);
-    s.memory = memory;
-    s.settings = settingsSchema.parse(values);
-    store.save(s);
-    await engine.configure(s);
-    return s;
+    return fileMutation(s, async () => {
+      const memory = values.memory ?? s.memory;
+      const previous = properties(s);
+      await engine.reconfigureMemory(s, memory);
+      s.memory = memory;
+      s.settings = settingsSchema.parse(values);
+      store.save(s);
+      const next = properties(s);
+      await engine.configure(
+        s,
+        Object.fromEntries(
+          Object.entries(next).filter(
+            ([key, value]) => value !== (previous as any)[key],
+          ),
+        ),
+      );
+      return s;
+    });
   });
   app.put("/api/servers/:id/appearance", async (req) => {
     const s = target(req);
@@ -520,9 +538,13 @@ export async function createApp(
           .refine((v) => v.split("\n").length <= 2, "Use at most two lines"),
       })
       .parse(req.body);
-    Object.assign(s, b);
-    store.save(s);
-    return { server: s, restartRequired: true };
+    return fileMutation(s, async () => {
+      const motdChanged = s.motd !== b.motd;
+      Object.assign(s, b);
+      store.save(s);
+      if (motdChanged) await engine.configure(s, { motd: b.motd });
+      return { server: s, restartRequired: true };
+    });
   });
   async function upload(req: any, max: number) {
     const part = await req.file();
@@ -571,47 +593,159 @@ export async function createApp(
       .type("image/png")
       .send(createReadStream(path.join(root, "images", s.id, kind + ".png")));
   });
+  // Reserve synchronously before awaiting I/O so start/restore/delete cannot race a write.
+  async function fileMutation<T>(s: Server, action: () => Promise<T>) {
+    idle(s);
+    jobs.fileMutations.add(s.id);
+    try {
+      const result = await action();
+      const configFile = await noSymlinks(engine.dir(s), "server.properties");
+      const info = await fs.stat(configFile).catch(() => null);
+      if (!info?.isFile() || info.size > EDITOR_LIMIT) return result;
+      const raw = decodeText(await fs.readFile(configFile));
+      if (raw === null) return result;
+      const p = readProperties(raw);
+      const fields = {
+        difficulty: "difficulty",
+        gamemode: "gamemode",
+        maxPlayers: "max-players",
+        viewDistance: "view-distance",
+        pvp: "pvp",
+        whitelist: "white-list",
+      } as const;
+      for (const [field, key] of Object.entries(fields)) {
+        if (!(key in p)) continue;
+        const old = (s.settings as any)[field];
+        const value =
+          typeof old === "number"
+            ? Number(p[key])
+            : typeof old === "boolean"
+              ? p[key] === "true"
+              : p[key];
+        const candidate = settingsSchema.safeParse({
+          ...s.settings,
+          [field]: value,
+        });
+        if (candidate.success) s.settings = candidate.data;
+      }
+      if (p.motd !== undefined) s.motd = p.motd;
+      store.save(s);
+      return result;
+    } finally {
+      jobs.fileMutations.delete(s.id);
+      storage.invalidate(s.id);
+    }
+  }
   app.get("/api/servers/:id/files", async (req) => {
     const s = target(req);
-    const rel = String((req.query as any).path || "");
-    const p = await noSymlinks(engine.dir(s), rel);
+    const p = await noSymlinks(
+      engine.dir(s),
+      String((req.query as any).path || ""),
+    );
     const entries = await fs.readdir(p, { withFileTypes: true });
     return entries
-      .filter((e) => !e.isSymbolicLink() && !e.name.startsWith("."))
-      .map((e) => ({ name: e.name, directory: e.isDirectory() }));
+      .filter((e) => !e.isSymbolicLink())
+      .map((e) => ({ name: e.name, directory: e.isDirectory() }))
+      .sort(
+        (a, b) =>
+          Number(b.directory) - Number(a.directory) ||
+          a.name.localeCompare(b.name),
+      );
   });
   app.get("/api/servers/:id/file", async (req) => {
     const s = target(req);
-    const rel = String((req.query as any).path || "");
-    if (!/\.(txt|json|yml|yaml|toml|properties|cfg|conf|log)$/.test(rel))
-      throw new Error("Only text configuration files can be opened");
-    if (rel.split("/").some((p) => p.startsWith(".")))
-      throw new Error("Hidden files cannot be opened");
-    const file = await noSymlinks(engine.dir(s), rel);
-    if ((await fs.stat(file)).size > 1024 ** 2)
-      throw new Error("File too large for the editor");
-    const text = await fs.readFile(file, "utf8");
-    if (path.resolve(file) === path.resolve(engine.dir(s), "server.properties"))
+    const file = await noSymlinks(
+      engine.dir(s),
+      String((req.query as any).path || ""),
+    );
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) throw new Error("Choose a file");
+    if (stat.size > EDITOR_LIMIT)
       return {
-        text: text.replace(/^rcon.password=.*$/gm, "rcon.password=[hidden]"),
+        text: "",
         readOnly: true,
+        reason:
+          "This file exceeds the 16 MB text editor limit. Download it to edit, then upload its replacement.",
       };
-    return { text, readOnly: false };
+    const text = decodeText(await fs.readFile(file));
+    return text === null
+      ? {
+          text: "",
+          readOnly: true,
+          reason:
+            "This is a binary or non-UTF-8 file. Download it to edit, then upload its replacement.",
+        }
+      : { text, readOnly: false };
   });
-  app.put("/api/servers/:id/file", async (req) => {
+  app.get("/api/servers/:id/file/download", async (req, reply) => {
     const s = target(req);
-    await stopped(s);
-    const b = z
-      .object({ path: z.string(), text: z.string().max(1024 ** 2) })
-      .parse(req.body);
-    if (
-      !/\.(txt|json|yml|yaml|toml|cfg|conf)$/.test(b.path) ||
-      ["eula.txt"].includes(b.path) ||
-      b.path.split("/").some((p) => p.startsWith("."))
-    )
-      throw new Error("This file is managed by the panel or is not editable");
-    await fs.writeFile(await noSymlinks(engine.dir(s), b.path), b.text);
-    return { ok: true };
+    const file = await noSymlinks(
+      engine.dir(s),
+      String((req.query as any).path || ""),
+    );
+    if (!(await fs.stat(file)).isFile()) throw new Error("Choose a file");
+    return reply
+      .type("application/octet-stream")
+      .header(
+        "Content-Disposition",
+        "attachment; filename*=UTF-8''" +
+          encodeURIComponent(path.basename(file)),
+      )
+      .send(createReadStream(file));
+  });
+  app.put(
+    "/api/servers/:id/file",
+    { bodyLimit: EDITOR_LIMIT * 6 + 4096 },
+    async (req) => {
+      const s = target(req);
+      const b = z
+        .object({
+          path: z.string().min(1),
+          text: z.string(),
+          overwrite: z.boolean().default(true),
+        })
+        .parse(req.body);
+      if (Buffer.byteLength(b.text) > EDITOR_LIMIT)
+        throw new Error("Text exceeds 16 MB; use file upload instead");
+      return fileMutation(s, async () => {
+        await replaceFile(engine.dir(s), b.path, b.text, b.overwrite);
+        return { ok: true };
+      });
+    },
+  );
+  app.post("/api/servers/:id/files/upload", async (req) => {
+    const s = target(req);
+    return fileMutation(s, async () => {
+      const q = req.query as any;
+      const folder = String(q.path || "");
+      await noSymlinks(engine.dir(s), folder);
+      const part = await req.file({
+        limits: { fileSize: Number.MAX_SAFE_INTEGER, files: 1, fields: 0 },
+      });
+      if (!part) throw new Error("Choose a file");
+      try {
+        const name = safeName(part.filename);
+        await replaceFile(
+          engine.dir(s),
+          [folder, name].filter(Boolean).join("/"),
+          part.file,
+          q.overwrite === "true",
+        );
+        return { ok: true, name };
+      } finally {
+        part.file.resume();
+      }
+    });
+  });
+  app.post("/api/servers/:id/files/folder", async (req) => {
+    const s = target(req);
+    const b = z.object({ path: z.string().min(1) }).parse(req.body);
+    return fileMutation(s, async () => {
+      await fs.mkdir(await noSymlinks(engine.dir(s), b.path), {
+        recursive: true,
+      });
+      return { ok: true };
+    });
   });
   app.post("/api/servers/:id/world", async (req) => {
     const s = target(req);

@@ -27,6 +27,8 @@ Minimum practical starting point: a 64-bit Intel/AMD laptop, working Docker/Casa
 
 - One isolated Docker container, game port, and data folder per server. Only the game port is published; RCON stays inside the Minecraft container.
 - Lifecycle controls, real CPU/memory values, live console, player/whitelist/operator commands, gameplay settings, and a text configuration editor.
+- The Files tab edits UTF-8 text of any extension (including `server.properties`, extensionless and hidden files), creates files/folders, downloads any file, and uploads multiple files into the selected folder. Uploads have no file-type allowlist or application size cap; available disk space and any proxy limits still apply. Existing-file replacement requires confirmation. Binary files and files over the 16 MB editor limit can be downloaded, edited with a suitable tool, and uploaded again.
+- Startup preserves existing `server.properties`, including `online-mode=false`. Settings and Appearance update only the values you change there. Console commands read the current RCON password/port. Changes to configuration require a Minecraft restart; editing active files is allowed, but Minecraft/plugins can overwrite files they have open. The file manager cannot access paths outside that server or follow symbolic links.
 - World ZIP import (2 GB upload, 8 GB expanded limit) validates paths and structure, stops Minecraft, backs up the existing server, and replaces its world. Java worlds only; Bedrock conversion is not provided.
 - Manual and scheduled full-server backups with retention. Backups stop the server for consistency and restart it if it was running. Restores make a safety backup and leave the server stopped for review.
 - Modrinth project search and required dependencies, version/loader filtering, checksum verification, and client requirements. Upload JAR files with a compatibility review; enable or disable installed files while stopped.
@@ -41,6 +43,10 @@ Minimum practical starting point: a 64-bit Intel/AMD laptop, working Docker/Casa
 ![Player activity with demonstration players](docs/screenshots/players-desktop.png)
 
 ![Workspace backups with demonstration content](docs/screenshots/workspace-backups-desktop.png)
+
+![File manager with demonstration files](docs/screenshots/files-manager-desktop.png)
+
+![Editable server properties with demonstration values](docs/screenshots/files-editor-desktop.png)
 
 **Compatibility labels describe metadata, not a runtime guarantee.** Unknown JAR metadata is shown as Unknown. Forge/NeoForge ranges, loader-specific behavior and arbitrary mod interactions cannot all be validated before startup. Test unfamiliar mod combinations on a separate server and keep backups. Players may need matching mods in their Minecraft clients. Vanilla does not load plugins; Paper/Spigot/Purpur load plugins, while Fabric/Forge/NeoForge/Quilt load mods.
 
@@ -61,7 +67,11 @@ staging/             temporary extraction and interrupted-operation recovery
 
 Keep `HOST_DATA_DIR` equal to the **host** path mounted as `/data`; sibling Minecraft containers need that path. Do not mount a named volume in its place. To move storage, stop all Minecraft containers and the panel, copy the complete folder to the new location, and update both the mount source and `HOST_DATA_DIR`.
 
-Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change only the panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.1.0` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Version 1.1 adds SQLite player-history tables automatically and preserves existing accounts and server settings. Server images are pinned to an itzg release and do not silently change with panel restarts.
+Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change only the panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.2.0` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Existing accounts, server registrations and worlds are preserved. Version 1.2 starts preserving existing property files immediately; it does not change their authentication setting during upgrade. Server images are pinned to an itzg release and do not silently change with panel restarts.
+
+To edit a configuration, open the server → **Files**, open the file, edit it, and click **Save file**. To upload, open the destination folder, choose files, click **Upload**, and confirm any replacements. Files are streamed to temporary files and renamed after completion; a failed transfer preserves the original. An interrupted panel process can leave a `.mk-upload-*` temporary file, which is not applied. Folder and file creation also accept nested relative paths.
+
+To change authentication, stop the server, open **Files → server.properties**, change `online-mode=true` to `online-mode=false`, save, then start it. Disabling authentication changes how player UUIDs are determined: existing inventories, permissions and whitelist entries may need migration. It also stops Minecraft from verifying who owns a username. Back up player data before changing modes. Changes to `server-port`, `level-name`, RCON or loader-managed files may require corresponding container/world-management changes; editing a file does not reconfigure Docker port mappings or select another server loader.
 
 If an existing server cannot start due to a RAM warning, open that server's **Settings**, lower **Server memory**, save, and start it again. The stopped Docker container is recreated with the new heap size. Its world, mods, and settings remain in the persistent data folder.
 
@@ -73,7 +83,7 @@ If you lose the administrator password, stop the panel and keep a copy of `panel
 
 On the same network, use the laptop's LAN address and the game port displayed by MK (first server normally `25565`, then the next free port). The laptop should have a stable DHCP reservation and should not sleep while hosting.
 
-For friends outside your home, forward **only each intended Minecraft TCP game port** from your router to the laptop. Do **not** forward port 8088, Docker, or RCON. If your ISP uses carrier-grade NAT, normal port forwarding will not work; a private VPN or game tunnel is a separate setup. Online authentication remains enabled.
+For friends outside your home, forward **only each intended Minecraft TCP game port** from your router to the laptop. Do **not** forward port 8088, Docker, or RCON. If your ISP uses carrier-grade NAT, normal port forwarding will not work; a private VPN or game tunnel is a separate setup. New servers enable online authentication by default.
 
 The panel manages Docker through its socket, which is powerful host-level access. Use only trusted admins, mods, and plugins, and keep the web UI on a trusted LAN or private VPN. CasaOS login does not replace the panel's own login. For a TLS reverse proxy, set `SECURE_COOKIE=true`; do not enable it for plain HTTP LAN access.
 

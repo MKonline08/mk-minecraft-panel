@@ -143,7 +143,8 @@ test("API authentication, origin protection, settings, image processing and file
       headers,
     });
     assert.equal(r.statusCode, 200);
-    assert.match(r.json().text, /rcon.password=\[hidden\]/);
+    assert.equal(r.json().readOnly, false);
+    assert.match(r.json().text, /rcon.password=[0-9a-f]+/);
     r = await app.inject({
       method: "PUT",
       url: "/api/servers/test-server/appearance",

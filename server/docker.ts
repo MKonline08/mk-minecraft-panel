@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { Server } from "./core.js";
-import { patchProperties, properties } from "./core.js";
+import { patchProperties, properties, readProperties } from "./core.js";
 export const IMAGE_RELEASE = "2026.9.2";
 const LABEL = "io.mk-panel.server";
 export class Engine {
@@ -88,20 +88,30 @@ export class Engine {
     }
     return { status, memory, cpu, players };
   }
-  async configure(s: Server) {
+  async configure(s: Server, changes?: Record<string, unknown>) {
     const dir = this.dir(s);
     await fs.mkdir(dir, { recursive: true });
     const file = path.join(dir, "server.properties");
-    const old = await fs.readFile(file, "utf8").catch(() => "");
+    const old = await fs.readFile(file, "utf8").catch((e) => {
+      if (e.code !== "ENOENT") throw e;
+      return null;
+    });
+    // Existing files belong to the administrator. Startup must not reset them.
+    if (old !== null && !changes) return;
     const password = await this.password(s);
     await fs.writeFile(
       file,
-      patchProperties(old, {
-        ...properties(s),
-        "enable-rcon": true,
-        "rcon.password": password,
-        "rcon.port": 25575,
-      }),
+      patchProperties(
+        old ?? "",
+        old === null
+          ? {
+              ...properties(s),
+              "enable-rcon": true,
+              "rcon.password": password,
+              "rcon.port": 25575,
+            }
+          : changes!,
+      ),
     );
   }
   async password(s: Server) {
@@ -242,8 +252,19 @@ export class Engine {
     const c = await this.container(s);
     if (!c || !(await c.inspect()).State.Running)
       throw new Error("Server is not running");
+    const config = readProperties(
+      await fs.readFile(path.join(this.dir(s), "server.properties"), "utf8"),
+    );
+    if (config["enable-rcon"] === "false")
+      throw new Error(
+        "RCON is disabled in server.properties; enable it and restart to use console and player controls",
+      );
     const exec = await c.exec({
       Cmd: ["rcon-cli", command],
+      Env: [
+        `RCON_PASSWORD=${config["rcon.password"] ?? (await this.password(s))}`,
+        `RCON_PORT=${config["rcon.port"] || "25575"}`,
+      ],
       AttachStdout: true,
       AttachStderr: true,
     });

@@ -77,6 +77,48 @@ try {
   const players = await api(`/servers/${server.id}/players`);
   assert.equal(players.status, "ready");
   assert.equal(players.online.length, 0);
+  await waitJob(await api(`/servers/${server.id}/actions`, { action: "stop" }));
+  const configPath = `/servers/${server.id}/file?path=server.properties`;
+  const original = (await api(configPath)).text;
+  await api(
+    `/servers/${server.id}/file`,
+    {
+      path: "server.properties",
+      text: original
+        .replace(/^online-mode=.*$/m, "online-mode=false")
+        .replace(
+          /^rcon.password=.*$/m,
+          "rcon.password=updated-package-test-secret",
+        )
+        .replace(/^max-players=.*$/m, "max-players=37"),
+    },
+    "PUT",
+  );
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob(["keep this uploaded file"]),
+    ".file-manager-test",
+  );
+  const uploaded = await fetch(base + `/servers/${server.id}/files/upload`, {
+    method: "POST",
+    headers: { cookie, "X-MK-Request": "1" },
+    body: form,
+  });
+  assert.equal(uploaded.status, 200, await uploaded.text());
+  await waitJob(
+    await api(`/servers/${server.id}/actions`, { action: "start" }),
+  );
+  assert.match((await api(configPath)).text, /^online-mode=false$/m);
+  assert.match((await api(configPath)).text, /^max-players=37$/m);
+  assert.match(
+    (await api(`/servers/${server.id}/command`, { command: "list" })).text,
+    /37/,
+  );
+  assert.equal(
+    (await api(`/servers/${server.id}/file?path=.file-manager-test`)).text,
+    "keep this uploaded file",
+  );
   await waitJob(
     await api(`/servers/${server.id}/actions`, { action: "backup" }),
   );
@@ -100,7 +142,7 @@ try {
     false,
   );
   console.log(
-    "PASS: packaged image applies defaults, reports players/storage, creates and deletes a backup, then stops and deletes a running server",
+    "PASS: packaged image preserves edited properties and uploaded files after restart, applies defaults, reports players/storage, creates and deletes a backup, then stops and deletes a running server",
   );
 } finally {
   if (!deleted)
