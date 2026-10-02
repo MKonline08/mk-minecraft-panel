@@ -504,7 +504,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.2.0</span>
+            MK PANEL <span>v1.2.1</span>
           </small>
         </div>
       </aside>
@@ -2467,7 +2467,8 @@ function Mods({ s, act, working }: PageProps) {
       <section className="panel">
         <h2>Installed files</h2>
         <p className="muted">
-          Stop the server before uploading or toggling files.
+          Stop the server before uploading, enabling, disabling, or removing
+          files. Removing a JAR keeps its settings and saved data folders.
         </p>
         {installed.error && <Notice error>{installed.error}</Notice>}
         {installed.data?.map((name) => (
@@ -2482,6 +2483,27 @@ function Mods({ s, act, working }: PageProps) {
               }}
             >
               {name.endsWith(".disabled") ? "Enable" : "Disable"}
+            </button>
+            <button
+              className="danger"
+              aria-label={`Remove ${name}`}
+              disabled={working || !["stopped", "failed"].includes(s.status)}
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    `Remove ${name} from ${s.name}? Only this JAR will be deleted. Its settings and saved data folders will stay. Other plugins may depend on it.`,
+                  )
+                )
+                  return;
+                await act(() =>
+                  api(base + "/mods?name=" + encodeURIComponent(name), {
+                    method: "DELETE",
+                  }),
+                );
+                void installed.reload();
+              }}
+            >
+              <Trash2 size={16} /> Remove
             </button>
           </div>
         ))}

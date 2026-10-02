@@ -157,7 +157,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.2.0" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.2.1" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -850,6 +850,23 @@ export async function createApp(
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, name), buffer, { flag: "wx" });
     return { installed: true, check };
+  });
+  app.delete("/api/servers/:id/mods", async (req) => {
+    const s = target(req);
+    const name = safeName(z.string().parse((req.query as any).name));
+    if (!/\.jar(?:\.disabled)?$/.test(name))
+      throw new Error("Choose a mod or plugin JAR file");
+    const folder = contentFolder(s.type);
+    return fileMutation(s, async () => {
+      const state = await engine.state(s);
+      if (!["stopped", "failed"].includes(state.status))
+        throw new Error("Stop the server before removing a mod or plugin");
+      const file = await noSymlinks(engine.dir(s), `${folder}/${name}`);
+      if (!(await fs.lstat(file)).isFile())
+        throw new Error("Choose a regular JAR file");
+      await fs.unlink(file);
+      return { ok: true };
+    });
   });
   app.post("/api/servers/:id/mods/toggle", async (req) => {
     const s = target(req);

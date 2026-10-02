@@ -10,6 +10,8 @@ Create independent Vanilla, Paper, Spigot, Purpur, Fabric, Forge, NeoForge, and 
 
 ## Installation on CasaOS
 
+Version 1.2.1 adds **Remove** beside installed mods and plugins. Stop the Minecraft server, open **Mods/Plugins → Installed files**, choose Remove and confirm the filename and server. Only that JAR is deleted; plugin settings, accounts, worlds and other data folders stay. Disabled JARs can also be removed. Other plugins may depend on the removed plugin.
+
 1. Check that your Debian laptop uses **x86_64 / amd64**: in its terminal, run `uname -m`. ARM packaging is not included in v1.
 2. Download **[docker-compose.yml](https://github.com/MKonline08/mk-minecraft-panel/releases/latest/download/docker-compose.yml)** from the latest release.
 3. In CasaOS, open **App Store → Custom Install → Import**, then import that file. CasaOS labels vary slightly by version. Leave storage and port defaults unchanged, then install.
@@ -67,7 +69,7 @@ staging/             temporary extraction and interrupted-operation recovery
 
 Keep `HOST_DATA_DIR` equal to the **host** path mounted as `/data`; sibling Minecraft containers need that path. Do not mount a named volume in its place. To move storage, stop all Minecraft containers and the panel, copy the complete folder to the new location, and update both the mount source and `HOST_DATA_DIR`.
 
-Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change only the panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.2.0` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Existing accounts, server registrations and worlds are preserved. Version 1.2 starts preserving existing property files immediately; it does not change their authentication setting during upgrade. Server images are pinned to an itzg release and do not silently change with panel restarts.
+Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. Change only the panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.2.1` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Existing accounts, server registrations and worlds are preserved. Version 1.2 starts preserving existing property files immediately; it does not change their authentication setting during upgrade. Server images are pinned to an itzg release and do not silently change with panel restarts.
 
 To edit a configuration, open the server → **Files**, open the file, edit it, and click **Save file**. To upload, open the destination folder, choose files, click **Upload**, and confirm any replacements. Files are streamed to temporary files and renamed after completion; a failed transfer preserves the original. An interrupted panel process can leave a `.mk-upload-*` temporary file, which is not applied. Folder and file creation also accept nested relative paths.
 
