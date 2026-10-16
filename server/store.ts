@@ -3,6 +3,14 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Server, Job } from "./core.js";
+import { announcements } from "./backup-settings.js";
+function normalize(s: Server): Server {
+  return {
+    ...s,
+    backupSchedule: s.backupSchedule ?? { mode: "interval" },
+    announcements: announcements(s),
+  };
+}
 export class Store {
   db: DatabaseSync;
   constructor(public root: string) {
@@ -26,12 +34,15 @@ export class Store {
       .prepare("INSERT OR REPLACE INTO settings VALUES (?,?)")
       .run(key, value);
   }
+  delete(key: string) {
+    this.db.prepare("DELETE FROM settings WHERE key=?").run(key);
+  }
   servers(): Server[] {
     return (
       this.db
         .prepare("SELECT data FROM servers ORDER BY rowid DESC")
         .all() as any[]
-    ).map((r) => JSON.parse(r.data));
+    ).map((r) => normalize(JSON.parse(r.data)));
   }
   server(id: string): Server {
     const row = this.db
@@ -39,7 +50,7 @@ export class Store {
       .get(id) as any;
     if (!row)
       throw Object.assign(new Error("Server not found"), { statusCode: 404 });
-    return JSON.parse(row.data);
+    return normalize(JSON.parse(row.data));
   }
   save(s: Server) {
     this.db
@@ -58,6 +69,10 @@ export class Store {
       this.db
         .prepare("DELETE FROM settings WHERE key=?")
         .run("player-cursors:" + id);
+      this.delete("backup-notice:" + id);
+      this.db
+        .prepare("DELETE FROM settings WHERE key LIKE ?")
+        .run(`backup-verified:${id}:%`);
       this.db.prepare("DELETE FROM servers WHERE id=?").run(id);
       this.db.exec("COMMIT");
     } catch (error) {

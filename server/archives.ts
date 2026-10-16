@@ -4,7 +4,8 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import yazl from "yazl";
-import { safePath } from "./core.js";
+import { crc32 } from "node:zlib";
+import { safePath, noSymlinks } from "./core.js";
 export async function extractZip(
   file: string,
   dest: string,
@@ -62,27 +63,101 @@ export async function extractZip(
     zip.readEntry();
   });
 }
-export async function zipFolder(dir: string, dest: string) {
+export async function verifyZip(
+  file: string,
+  progress: (bytes: number) => void = () => {},
+  maxBytes = Number.MAX_SAFE_INTEGER,
+) {
+  const zip = await new Promise<yauzl.ZipFile>((resolve, reject) =>
+    yauzl.open(file, { lazyEntries: true, validateEntrySizes: true }, (e, z) =>
+      e ? reject(e) : resolve(z!),
+    ),
+  );
+  let bytes = 0,
+    expected = 0,
+    count = 0;
+  return new Promise<number>((resolve, reject) => {
+    let failed = false;
+    const fail = (e: Error) => {
+      if (!failed) {
+        failed = true;
+        zip.close();
+        reject(e);
+      }
+    };
+    zip.on("error", fail);
+    zip.on("end", () => resolve(bytes));
+    zip.on("entry", async (entry: yauzl.Entry) => {
+      try {
+        if (++count > 100000 || (expected += entry.uncompressedSize) > maxBytes)
+          throw new Error("Archive exceeds verification limits");
+        if (entry.generalPurposeBitFlag & 1)
+          throw new Error("Encrypted archives are not supported");
+        safePath("/archive", entry.fileName);
+        if (((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000)
+          throw new Error("Archive symbolic links are not allowed");
+        let checksum = 0,
+          size = 0;
+        const stream = await new Promise<NodeJS.ReadableStream>((res, rej) =>
+          zip.openReadStream(entry, (e, s) => (e ? rej(e) : res(s!))),
+        );
+        for await (const chunk of stream as any) {
+          checksum = crc32(chunk, checksum);
+          size += chunk.length;
+          bytes += chunk.length;
+          if (bytes > maxBytes)
+            throw new Error("Archive exceeds verification limits");
+          progress(bytes);
+        }
+        if (size !== entry.uncompressedSize || checksum !== entry.crc32)
+          throw new Error(`Backup verification failed: ${entry.fileName}`);
+        if (!failed) zip.readEntry();
+      } catch (e) {
+        fail(e as Error);
+      }
+    });
+    zip.readEntry();
+  });
+}
+export async function zipFolder(
+  dir: string,
+  dest: string,
+  options: {
+    progress?: (bytes: number, total: number) => void;
+    stage?: (stage: string) => void;
+  } = {},
+) {
   const zip = new yazl.ZipFile();
+  await noSymlinks(dir, "");
+  await noSymlinks(path.dirname(dest), path.basename(dest));
+  await noSymlinks(path.dirname(dest), path.basename(dest) + ".partial");
   await fs.mkdir(path.dirname(dest), { recursive: true });
   const writing = pipeline(
     zip.outputStream,
-    createWriteStream(dest + ".partial"),
+    createWriteStream(dest + ".partial", { flags: "wx" }),
   );
+  void writing.catch(() => {});
+  let total = 0;
   async function walk(folder: string) {
     for (const item of await fs.readdir(folder, { withFileTypes: true })) {
       if (item.isSymbolicLink())
         throw new Error("Cannot back up symbolic links");
-      const p = path.join(folder, item.name);
+      const p = await noSymlinks(folder, item.name);
       if (item.isDirectory()) await walk(p);
-      else if (item.isFile())
+      else if (item.isFile()) {
+        total += (await fs.stat(p)).size;
         zip.addFile(p, path.relative(dir, p).replaceAll("\\", "/"));
+      }
     }
   }
   try {
     await walk(dir);
     zip.end();
     await writing;
+    options.stage?.("Verifying backup");
+    await verifyZip(dest + ".partial", (bytes) =>
+      options.progress?.(bytes, total),
+    );
     await fs.rename(dest + ".partial", dest);
   } catch (e) {
     zip.end();

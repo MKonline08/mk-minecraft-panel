@@ -4,7 +4,13 @@ import { createHash } from "node:crypto";
 import semver from "semver";
 import { jarFiles } from "./archives.js";
 import { json, USER_AGENT } from "./catalog.js";
-import { contentFolder, pluginType, safeName, type Server } from "./core.js";
+import {
+  contentFolder,
+  pluginType,
+  safeName,
+  noSymlinks,
+  type Server,
+} from "./core.js";
 export type Compatibility = {
   status: "Compatible metadata" | "Incompatible" | "Unknown";
   reasons: string[];
@@ -184,24 +190,27 @@ export async function resolveMods(project: string, s: Server) {
   return items;
 }
 export async function installMods(items: any[], dir: string, s: Server) {
-  const folder = path.join(dir, contentFolder(s.type));
+  const folder = await noSymlinks(dir, contentFolder(s.type));
   await fs.mkdir(folder, { recursive: true });
-  const manifestPath = path.join(folder, ".mk-modrinth.json");
+  const manifestPath = await noSymlinks(folder, ".mk-modrinth.json");
   const recorded = JSON.parse(
-    await fs.readFile(manifestPath, "utf8").catch(() => "[]"),
+    await fs.readFile(manifestPath, "utf8").catch((e) => {
+      if (e.code === "ENOENT") return "[]";
+      throw e;
+    }),
   );
   const installed: any[] = [];
   for (const row of recorded) {
     if (
       await fs
-        .access(path.join(folder, safeName(row.file)))
+        .access(await noSymlinks(folder, safeName(row.file)))
         .then(() => true)
         .catch(() => false)
     )
       installed.push(row);
     else if (
       await fs
-        .access(path.join(folder, safeName(row.file) + ".disabled"))
+        .access(await noSymlinks(folder, safeName(row.file) + ".disabled"))
         .then(() => true)
         .catch(() => false)
     )
@@ -259,7 +268,7 @@ export async function installMods(items: any[], dir: string, s: Server) {
     if (!name.endsWith(".jar"))
       throw new Error("Only JAR files can be installed");
     await fs
-      .access(path.join(folder, name))
+      .access(await noSymlinks(folder, name))
       .then(() => {
         throw new Error(`${name} already exists`);
       })
@@ -271,7 +280,7 @@ export async function installMods(items: any[], dir: string, s: Server) {
   const added: string[] = [];
   try {
     for (const d of downloaded) {
-      await fs.writeFile(path.join(folder, d.name), d.b, { flag: "wx" });
+      await fs.writeFile(await noSymlinks(folder, d.name), d.b, { flag: "wx" });
       added.push(d.name);
     }
     await fs.writeFile(
@@ -293,7 +302,7 @@ export async function installMods(items: any[], dir: string, s: Server) {
     );
   } catch (e) {
     for (const name of added)
-      await fs.rm(path.join(folder, name), { force: true });
+      await fs.rm(await noSymlinks(folder, name), { force: true });
     throw e;
   }
 }

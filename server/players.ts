@@ -36,7 +36,7 @@ export class PlayerTracker {
     if (start) {
       this.timer = setInterval(() => {
         void this.tick();
-      }, 5000);
+      }, 30000);
       this.timer.unref();
       void this.tick();
     }
@@ -65,7 +65,8 @@ export class PlayerTracker {
         updatedAt: null,
       };
     const cached = this.snapshots.get(s.id);
-    if (!cached || Date.now() - cached.fetchedAt >= 5000) await this.refresh(s);
+    if (!cached || Date.now() - cached.fetchedAt >= 30000)
+      await this.refresh(s);
     return {
       status: "unavailable",
       online: [],

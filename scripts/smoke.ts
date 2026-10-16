@@ -45,6 +45,10 @@ try {
   await engine.ready(server, log);
   assert.equal((await engine.state(server)).status, "running");
   assert.match(await engine.command(server, "list"), /players|online/i);
+  await engine.command(
+    server,
+    "say [Backup test] Server announcements are available.",
+  );
   await assert.rejects(engine.ensurePort(server.port));
   await fs.writeFile(
     path.join(engine.dir(server), "mk-persistence.txt"),
@@ -72,7 +76,10 @@ try {
     assert.equal(inspected.HostConfig.Memory, 2 * 1024 ** 3 + 768 * 1024 ** 2);
     assert.ok(inspected.Config.Env?.includes("MEMORY=2G"));
     assert.equal(
-      await fs.readFile(path.join(engine.dir(server), "mk-persistence.txt"), "utf8"),
+      await fs.readFile(
+        path.join(engine.dir(server), "mk-persistence.txt"),
+        "utf8",
+      ),
       "keep-me",
     );
   }

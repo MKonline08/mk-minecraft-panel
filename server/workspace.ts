@@ -83,6 +83,10 @@ export class Storage {
         worlds.push({ name, bytes: await directoryBytes(dir) });
     }
     return {
+      diskFree: await fs
+        .statfs(this.root)
+        .then((st) => st.bavail * st.bsize)
+        .catch(() => null),
       serverBytes: await directoryBytes(serverDir),
       backupBytes: await directoryBytes(backupDir),
       worlds,
@@ -90,7 +94,7 @@ export class Storage {
     };
   }
 }
-export async function backupList(root: string, s: Server) {
+export async function backupList(root: string, s: Server, store?: Store) {
   const dir = await noSymlinks(root, `backups/${s.id}`);
   const entries = await fs
     .readdir(dir, { withFileTypes: true })
@@ -101,11 +105,22 @@ export async function backupList(root: string, s: Server) {
   const list = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".zip")) continue;
-    const st = await fs.stat(path.join(dir, entry.name));
+    const st = await fs.stat(await noSymlinks(dir, entry.name));
+    const verified = JSON.parse(
+      store?.get(`backup-verified:${s.id}:${entry.name}`) || "null",
+    );
     list.push({
       name: entry.name,
       size: st.size,
       createdAt: st.mtime.toISOString(),
+      verification:
+        verified?.size === st.size && verified?.mtime === st.mtimeMs
+          ? "verified"
+          : "unknown",
+      verifiedAt:
+        verified?.size === st.size && verified?.mtime === st.mtimeMs
+          ? verified.verifiedAt
+          : null,
     });
   }
   return list.sort((a, b) => b.name.localeCompare(a.name));

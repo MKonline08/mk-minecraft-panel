@@ -49,7 +49,7 @@ async function waitJob(job) {
     await new Promise((r) => setTimeout(r, 2000));
     const current = (await api("/jobs")).find((j) => j.id === job.id);
     if (current?.status === "failed") throw new Error(current.message);
-    if (current?.status === "done") return;
+    if (current?.status === "done") return current;
   }
   throw new Error("Operation did not complete: " + job.kind);
 }
@@ -119,11 +119,27 @@ try {
     (await api(`/servers/${server.id}/file?path=.file-manager-test`)).text,
     "keep this uploaded file",
   );
-  await waitJob(
+  const backupJob = await waitJob(
     await api(`/servers/${server.id}/actions`, { action: "backup" }),
+  );
+  assert.equal(backupJob.verified, true);
+  assert.equal(backupJob.wasRunning, true);
+  assert.ok(
+    backupJob.announcementEvents.some(
+      (e) => e.key === "warning:10" && e.status === "sent",
+    ),
+  );
+  assert.ok(
+    backupJob.announcementEvents.some(
+      (e) => e.key === "complete" && e.status === "sent",
+    ),
   );
   const backups = await api(`/servers/${server.id}/backups`);
   assert.equal(backups.length, 1);
+  assert.equal(backups[0].verification, "verified");
+  const logs = await api(`/servers/${server.id}/logs?cursor=start`);
+  assert.ok(logs.cursor);
+  assert.ok(Array.isArray(logs.lines));
   await waitJob(
     await api(
       `/servers/${server.id}/backup/${encodeURIComponent(backups[0].name)}`,

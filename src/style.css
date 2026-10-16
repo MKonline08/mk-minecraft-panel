@@ -1779,3 +1779,53 @@ dd {
     grid-template-columns: 1fr;
   }
 }
+/* Backup and console controls wrap on small screens. */
+.console-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.console-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.console-controls input[type="checkbox"],
+.backups-panel input[type="checkbox"] {
+  width: auto;
+}
+.console-controls input[aria-label="Search console"] {
+  flex: 1;
+  min-width: 160px;
+}
+.backup-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+.backups-panel .field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.announcement-preview {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.backups-panel .list-row {
+  flex-wrap: wrap;
+}
+.backups-panel .list-row > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.command-responses {
+  max-height: 180px;
+}

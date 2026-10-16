@@ -1,3 +1,5 @@
+import { api, send, useLoad } from "./api.js";
+import { Console, Backups } from "./backup-console.js";
 import React, { useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -78,48 +80,6 @@ type J = {
 const pretty = (s: string) =>
   s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 const gb = (n: number) => Number(n / 1024 ** 3).toFixed(1);
-async function api(url: string, options: RequestInit = {}) {
-  const r = await fetch("/api" + url, {
-    ...options,
-    headers: {
-      "X-MK-Request": "1",
-      ...(options.body && !(options.body instanceof FormData)
-        ? { "Content-Type": "application/json" }
-        : {}),
-      ...options.headers,
-    },
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "Request failed");
-  return data;
-}
-const send = (url: string, body?: unknown, method = "POST") =>
-  api(url, {
-    method,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-function useLoad<T>(fn: () => Promise<T>, deps: any[], interval = 0) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState("");
-  const reload = useCallback(async () => {
-    try {
-      const d = await fn();
-      setData(d);
-      setError("");
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, deps);
-  useEffect(() => {
-    setData(null);
-    void reload();
-    if (interval) {
-      const id = setInterval(reload, interval);
-      return () => clearInterval(id);
-    }
-  }, [reload, interval]);
-  return { data, error, reload };
-}
 function Brand() {
   return (
     <div className="brand">
@@ -504,7 +464,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.2.1</span>
+            MK PANEL <span>v1.3.0</span>
           </small>
         </div>
       </aside>
@@ -1446,53 +1406,6 @@ function ServerPage(p: PageProps) {
     </>
   );
 }
-function Console({ s, act, working }: PageProps) {
-  const base = "/servers/" + s.id;
-  const logs = useLoad<any>(() => api(base + "/logs"), [s.id], 4000);
-  const [command, setCommand] = useState("");
-  const [response, setResponse] = useState("");
-  return (
-    <div className="panel">
-      <div className="section-heading">
-        <h2>
-          <Terminal size={20} /> Live console
-        </h2>
-        <span className="muted">Refreshes every 4 seconds</span>
-      </div>
-      {logs.error && <Notice error>{logs.error}</Notice>}
-      <pre className="console">
-        {logs.data?.text || "Waiting for server output…"}
-        {response && "\n> " + response}
-      </pre>
-      <form
-        className="inline-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const r = await act(
-            () => send(base + "/command", { command }),
-            "Command sent",
-          );
-          if (r) {
-            setResponse(r.text);
-            setCommand("");
-            void logs.reload();
-          }
-        }}
-      >
-        <span className="prompt">&gt;</span>
-        <input
-          aria-label="Server command"
-          placeholder="Enter a Minecraft command, e.g. list"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-        />
-        <button className="primary" disabled={working || !command.trim()}>
-          Send
-        </button>
-      </form>
-    </div>
-  );
-}
 function ServerSettings({ s, act, working, onDelete }: PageProps) {
   const [v, setV] = useState(s.settings);
   const [memory, setMemory] = useState(s.memoryLimit);
@@ -1906,131 +1819,6 @@ function Players({ s, act, working, refreshMs }: PageProps) {
           </section>
         ))}
       </div>
-    </div>
-  );
-}
-function Backups({ s, act, working }: PageProps) {
-  const base = "/servers/" + s.id;
-  const list = useLoad<any[]>(() => api(base + "/backups"), [s.id], 5000);
-  const [hours, setHours] = useState(s.backupHours);
-  const [retention, setRetention] = useState(s.retention);
-  const [restore, setRestore] = useState<string | null>(null);
-  return (
-    <div className="panel">
-      <div className="section-heading">
-        <h2>
-          <Archive size={22} /> Backups & restore
-        </h2>
-        <button
-          className="primary"
-          disabled={working}
-          onClick={() =>
-            act(
-              () => send(base + "/actions", { action: "backup" }),
-              "Backup started",
-            )
-          }
-        >
-          <Plus size={16} /> Back up now
-        </button>
-      </div>
-      <p className="muted">
-        Backups briefly stop the server for consistency, then restart it if it
-        was running. Restoring creates a safety backup and leaves the server
-        stopped.
-      </p>
-      <div className="form-grid">
-        <Field label="Automatic backups">
-          <select value={hours} onChange={(e) => setHours(+e.target.value)}>
-            <option value={0}>Manual only</option>
-            {[6, 12, 24, 48, 168].map((h) => (
-              <option key={h} value={h}>
-                Every {h} hours
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Backups to keep">
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={retention}
-            onChange={(e) => setRetention(+e.target.value)}
-          />
-        </Field>
-      </div>
-      <button
-        disabled={working}
-        onClick={() =>
-          act(() =>
-            send(base + "/backups", { backupHours: hours, retention }, "PUT"),
-          )
-        }
-      >
-        Save schedule
-      </button>
-      {list.error && <Notice error>{list.error}</Notice>}
-      <div className="backup-list">
-        {list.data?.map((b) => (
-          <div className="list-row" key={b.name}>
-            <Archive size={18} />
-            <div>
-              <strong>{b.name}</strong>
-              <small>{(b.size / 1024 ** 2).toFixed(1)} MB</small>
-            </div>
-            <a
-              className="button"
-              href={"/api" + base + "/backup/" + encodeURIComponent(b.name)}
-              aria-label={"Download " + b.name}
-            >
-              <Download size={16} />
-            </a>
-            <button disabled={working} onClick={() => setRestore(b.name)}>
-              Restore
-            </button>
-            <BackupDelete
-              serverId={s.id}
-              serverName={s.name}
-              name={b.name}
-              disabled={working}
-              onDone={() => {
-                void act(async () => ({ ok: true }), "Backup deletion started");
-                void list.reload();
-              }}
-            />
-          </div>
-        ))}
-        {!list.data?.length && (
-          <Empty icon={Archive} title="A little peace of mind">
-            Your backups will appear here.
-          </Empty>
-        )}
-      </div>
-      {restore && (
-        <Notice>
-          <p>
-            Restore <strong>{restore}</strong>? Current files will be backed up
-            before replacement.
-          </p>
-          <div className="button-row">
-            <button
-              disabled={working}
-              className="primary"
-              onClick={async () => {
-                await act(
-                  () => send(base + "/restore", { name: restore }),
-                  "Restore started",
-                );
-                setRestore(null);
-              }}
-            >
-              Restore this backup
-            </button>
-            <button onClick={() => setRestore(null)}>Cancel</button>
-          </div>
-        </Notice>
-      )}
     </div>
   );
 }
