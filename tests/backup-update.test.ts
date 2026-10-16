@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { randomUUID, scryptSync } from "node:crypto";
 import { Store } from "../server/store.js";
 import { Engine } from "../server/docker.js";
 import { Jobs } from "../server/jobs.js";
@@ -349,6 +349,16 @@ test("announcement failures cannot prevent backup or restart", async () => {
 test("v1.2.1 records, account, world and backup survive reopening and new APIs remain compatible", async () => {
   const f = await fixture();
   await f.jobs.drain();
+  f.store.set("username", "upgrade-admin");
+  f.store.set(
+    "password",
+    "old-salt:" +
+      scryptSync("upgrade-password-123", "old-salt", 64).toString("hex"),
+  );
+  const playerId = randomUUID();
+  f.store.observePlayer(f.s.id, "Alex", playerId, "2026-10-01T00:00:00Z");
+  const oldBackup = path.join(f.root, "backups", f.s.id, "old-backup.zip");
+  await zipFolder(f.engine.dir(f.s), oldBackup);
   const { app, store } = await createApp({
     root: f.root,
     engine: f.engine,
@@ -357,7 +367,7 @@ test("v1.2.1 records, account, world and backup survive reopening and new APIs r
   try {
     const setup = await app.inject({
       method: "POST",
-      url: "/api/auth/setup",
+      url: "/api/auth/login",
       headers: { "x-mk-request": "1" },
       payload: { username: "upgrade-admin", password: "upgrade-password-123" },
     });
@@ -366,6 +376,12 @@ test("v1.2.1 records, account, world and backup survive reopening and new APIs r
       "x-mk-request": "1",
     };
     const savedPassword = store.get("password");
+    assert.equal(setup.statusCode, 200);
+    assert.equal(store.playerHistory(f.s.id)[0].uuid, playerId.toLowerCase());
+    assert.equal(
+      (await backupList(f.root, f.s, store))[0].name,
+      "old-backup.zip",
+    );
     const response = await app.inject({
       method: "PUT",
       url: `/api/servers/${f.s.id}/backups`,
@@ -424,6 +440,119 @@ test("v1.2.1 records, account, world and backup survive reopening and new APIs r
     await f.close();
   }
 });
+
+test("cancelled countdown cannot be revived by an in-flight server check", async () => {
+  const f = await fixture();
+  try {
+    let release!: () => void;
+    f.engine.state = () =>
+      new Promise((resolve) => {
+        release = () =>
+          resolve({ status: "running", memory: 0, cpu: 0, players: null });
+      });
+    const j = f.store.newJob(f.s.id, "backup", { dueAt: Date.now() + 10000 });
+    const waiting = f.jobs.countdown(j);
+    f.jobs.cancelCountdown(f.s.id);
+    release();
+    await waiting;
+    assert.equal(f.store.job(j.id).stage, "cancelled");
+    assert.equal(f.commands.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("deferred scheduled backups enqueue once after another operation finishes", async () => {
+  const f = await fixture();
+  try {
+    f.s.created = "2020-01-01T00:00:00Z";
+    f.s.announcements = { ...announcements(f.s), enabled: false };
+    f.store.save(f.s);
+    const blocker = f.store.newJob(f.s.id, "start");
+    await f.jobs.schedule();
+    assert.equal(f.store.unfinishedJobs().length, 1);
+    blocker.status = "done";
+    f.store.saveJob(blocker);
+    // Keep the enqueued backup queued for inspection.
+    const originalTick = f.jobs.tick.bind(f.jobs);
+    f.jobs.tick = async () => {};
+    await f.jobs.schedule();
+    await f.jobs.schedule();
+    assert.equal(
+      f.store.unfinishedJobs().filter((j) => j.kind === "backup").length,
+      1,
+    );
+    f.jobs.tick = originalTick;
+    await f.jobs.tick();
+    assert.equal(
+      f.store.jobs().find((j) => j.kind === "backup")?.status,
+      "done",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test(
+  "file symlinks cannot redirect config, RCON credentials, player reads or backup metadata",
+  { skip: process.platform === "win32" },
+  async () => {
+    const f = await fixture();
+    const { app } = await createApp({
+      root: f.root,
+      engine: f.engine,
+      scheduling: false,
+    });
+    try {
+      const target = path.join(f.root, "private.txt");
+      await fs.writeFile(target, "unchanged");
+      for (const name of ["server.properties", ".mk-rcon-password"]) {
+        const file = path.join(f.engine.dir(f.s), name);
+        await fs.rm(file, { force: true });
+        await fs.symlink(target, file);
+        await assert.rejects(
+          name === "server.properties"
+            ? f.engine.configure(f.s)
+            : f.engine.password(f.s),
+          /Symbolic links/,
+        );
+        await fs.rm(file);
+      }
+      await f.engine.configure(f.s);
+      await fs.symlink(
+        target,
+        path.join(f.engine.dir(f.s), ".mk-settings.json"),
+      );
+      await assert.rejects(
+        f.jobs.backup(f.s, () => {}, true),
+        /Symbolic links/,
+      );
+      assert.equal(f.starts, 1);
+      assert.equal(await fs.readFile(target, "utf8"), "unchanged");
+      await fs.symlink(target, path.join(f.engine.dir(f.s), "whitelist.json"));
+      const setup = await app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        headers: { "x-mk-request": "1" },
+        payload: {
+          username: "symlink-admin",
+          password: "symlink-password-123",
+        },
+      });
+      const response = await app.inject({
+        url: `/api/servers/${f.s.id}/players`,
+        headers: {
+          cookie: setup.cookies.map((c) => `${c.name}=${c.value}`).join("; "),
+        },
+      });
+      assert.equal(response.statusCode, 400);
+      assert.match(response.json().error, /Symbolic links/);
+    } finally {
+      await app.close();
+      await f.close();
+    }
+  },
+);
 
 test("server-directory symlinks cannot redirect configuration, backup or nested file access", async () => {
   const f = await fixture();
