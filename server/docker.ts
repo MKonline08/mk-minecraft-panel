@@ -5,7 +5,14 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { Server } from "./core.js";
-import { patchProperties, properties, readProperties } from "./core.js";
+import {
+  patchProperties,
+  properties,
+  readProperties,
+  noSymlinks,
+  safePath,
+} from "./core.js";
+import { logPage, cursorSince } from "./console.js";
 export const IMAGE_RELEASE = "2026.9.2";
 const LABEL = "io.mk-panel.server";
 export class Engine {
@@ -20,7 +27,10 @@ export class Engine {
     });
   }
   dir(s: Server) {
-    return path.join(this.root, "servers", s.id);
+    return safePath(this.root, `servers/${s.id}`);
+  }
+  async file(s: Server, relative: string) {
+    return noSymlinks(this.root, `servers/${s.id}/${relative}`);
   }
   async system() {
     const info = await this.docker.info();
@@ -89,9 +99,9 @@ export class Engine {
     return { status, memory, cpu, players };
   }
   async configure(s: Server, changes?: Record<string, unknown>) {
-    const dir = this.dir(s);
+    const dir = await this.file(s, "");
     await fs.mkdir(dir, { recursive: true });
-    const file = path.join(dir, "server.properties");
+    const file = await this.file(s, "server.properties");
     const old = await fs.readFile(file, "utf8").catch((e) => {
       if (e.code !== "ENOENT") throw e;
       return null;
@@ -115,7 +125,7 @@ export class Engine {
     );
   }
   async password(s: Server) {
-    const file = path.join(this.dir(s), ".mk-rcon-password");
+    const file = await this.file(s, ".mk-rcon-password");
     try {
       return await fs.readFile(file, "utf8");
     } catch (e: any) {
@@ -248,12 +258,32 @@ export class Engine {
     })) as Buffer;
     return demux(raw).slice(-60000);
   }
+  async logPage(s: Server, cursor: string) {
+    const since = cursorSince(cursor);
+    const c = await this.container(s);
+    if (!c) return logPage("", "absent", cursor);
+    const state = await c.inspect();
+    const epoch = `${state.Id}:${state.State.StartedAt}`;
+    let sameEpoch = false;
+    try {
+      sameEpoch =
+        JSON.parse(Buffer.from(cursor, "base64url").toString()).epoch === epoch;
+    } catch {}
+    const raw = (await c.logs({
+      stdout: true,
+      stderr: true,
+      timestamps: true,
+      tail: 2000,
+      ...(sameEpoch && since !== undefined ? { since } : {}),
+    })) as Buffer;
+    return logPage(demux(raw), epoch, cursor);
+  }
   async command(s: Server, command: string) {
     const c = await this.container(s);
     if (!c || !(await c.inspect()).State.Running)
       throw new Error("Server is not running");
     const config = readProperties(
-      await fs.readFile(path.join(this.dir(s), "server.properties"), "utf8"),
+      await fs.readFile(await this.file(s, "server.properties"), "utf8"),
     );
     if (config["enable-rcon"] === "false")
       throw new Error(

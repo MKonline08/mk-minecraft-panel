@@ -41,6 +41,14 @@ import {
 } from "./workspace.js";
 import { PlayerTracker } from "./players.js";
 import { EDITOR_LIMIT, decodeText, replaceFile } from "./files.js";
+import {
+  scheduleSchema,
+  announcementSchema,
+  announcements,
+  renderAnnouncement,
+  nextBackup,
+  nextCalendar,
+} from "./backup-settings.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 export async function createApp(
@@ -61,7 +69,7 @@ export async function createApp(
   );
   engine.onlineCount = (id) => {
     const current = players.snapshots.get(id);
-    return current?.status === "ready" && Date.now() - current.fetchedAt < 15000
+    return current?.status === "ready" && Date.now() - current.fetchedAt < 45000
       ? current.online.length
       : null;
   };
@@ -157,7 +165,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.2.1" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.3.0" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -273,7 +281,7 @@ export async function createApp(
             ? (await storage.get(s)).worlds
             : kind === "mods"
               ? await content.installed(s)
-              : await backupList(root, s);
+              : await backupList(root, s, store);
       } catch (e: any) {
         error = e.message;
       }
@@ -345,6 +353,8 @@ export async function createApp(
   });
   const snapshot = async (s: Server) => ({
     ...s,
+    nextBackupAt:
+      nextBackup(s) === null ? null : new Date(nextBackup(s)!).toISOString(),
     ...(await engine.state(s).catch(() => ({
       status: "unavailable",
       memory: 0,
@@ -455,9 +465,14 @@ export async function createApp(
       .parse(req.body);
     return jobs.enqueue(s.id, b.action);
   });
-  app.get("/api/servers/:id/logs", async (req) => ({
-    text: await engine.logs(target(req)),
-  }));
+  app.get("/api/servers/:id/logs", async (req) => {
+    const q = z
+      .object({ cursor: z.string().min(1).max(2048).optional() })
+      .parse(req.query);
+    return q.cursor
+      ? engine.logPage(target(req), q.cursor)
+      : { text: await engine.logs(target(req)) };
+  });
   app.post("/api/servers/:id/command", async (req) => {
     const s = target(req);
     const command = z
@@ -477,7 +492,10 @@ export async function createApp(
     const dir = engine.dir(s);
     const read = async (name: string) =>
       JSON.parse(
-        await fs.readFile(path.join(dir, name), "utf8").catch(() => "[]"),
+        await fs.readFile(await engine.file(s, name), "utf8").catch((e) => {
+          if (e.code === "ENOENT") return "[]";
+          throw e;
+        }),
       );
     return {
       ...(await players.get(s)),
@@ -575,12 +593,12 @@ export async function createApp(
       })
       .png()
       .toBuffer();
-    const dir = path.join(root, "images", s.id);
+    const dir = await noSymlinks(root, `images/${s.id}`);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, kind + ".png"), data);
+    await fs.writeFile(await noSymlinks(dir, kind + ".png"), data);
     if (kind === "icon") {
-      await fs.mkdir(engine.dir(s), { recursive: true });
-      await fs.writeFile(path.join(engine.dir(s), "server-icon.png"), data);
+      await fs.mkdir(await engine.file(s, ""), { recursive: true });
+      await fs.writeFile(await engine.file(s, "server-icon.png"), data);
     }
     s[kind] = true;
     store.save(s);
@@ -591,7 +609,9 @@ export async function createApp(
     const kind = z.enum(["banner", "icon"]).parse((req.params as any).kind);
     return reply
       .type("image/png")
-      .send(createReadStream(path.join(root, "images", s.id, kind + ".png")));
+      .send(
+        createReadStream(await noSymlinks(root, `images/${s.id}/${kind}.png`)),
+      );
   });
   // Reserve synchronously before awaiting I/O so start/restore/delete cannot race a write.
   async function fileMutation<T>(s: Server, action: () => Promise<T>) {
@@ -753,7 +773,7 @@ export async function createApp(
     const part = await req.file();
     if (!part || !part.filename.toLowerCase().endsWith(".zip"))
       throw new Error("Choose a ZIP world archive");
-    const dir = path.join(root, "uploads");
+    const dir = await noSymlinks(root, "uploads");
     await fs.mkdir(dir, { recursive: true });
     const file = path.join(dir, randomUUID() + ".zip");
     try {
@@ -766,7 +786,7 @@ export async function createApp(
     }
   });
   app.get("/api/servers/:id/backups", async (req) => {
-    return backupList(root, target(req));
+    return backupList(root, target(req), store);
   });
   app.delete("/api/servers/:id/backup/:name", async (req) => {
     const s = target(req);
@@ -779,16 +799,45 @@ export async function createApp(
   });
   app.put("/api/servers/:id/backups", async (req) => {
     const s = target(req);
-    idle(s);
     const b = z
       .object({
         backupHours: z.number().int().min(0).max(168),
         retention: z.number().int().min(1).max(50),
+        backupSchedule: scheduleSchema.optional(),
+        announcements: announcementSchema.optional(),
       })
       .parse(req.body);
+    const active = store.unfinishedJobs().filter((j) => j.serverId === s.id);
+    if (
+      jobs.fileMutations.has(s.id) ||
+      active.some(
+        (j) =>
+          j.kind !== "backup" || j.status !== "queued" || j.payload.recover,
+      )
+    )
+      throw new Error("Wait for the current server operation to finish");
+    jobs.cancelCountdown(s.id);
+    b.backupSchedule ??= { mode: "interval" };
     Object.assign(s, b);
+    s.nextBackupAt =
+      b.backupSchedule.mode === "daily" || b.backupSchedule.mode === "weekly"
+        ? new Date(nextCalendar(b.backupSchedule, Date.now())!).toISOString()
+        : null;
     store.save(s);
     return s;
+  });
+  app.post("/api/servers/:id/backups/announce", async (req) => {
+    const s = target(req);
+    const b = z
+      .object({
+        kind: z.enum(["warning", "shutdown", "complete", "failure"]),
+        announcements: announcementSchema.optional(),
+      })
+      .parse(req.body);
+    const settings = b.announcements ?? announcements(s);
+    const text = renderAnnouncement(settings[b.kind], s.name, 300, 60);
+    await engine.command(s, "say " + text);
+    return { text };
   });
   app.post("/api/servers/:id/restore", async (req) => {
     const s = target(req);
@@ -814,7 +863,10 @@ export async function createApp(
     const s = target(req);
     const folder = contentFolder(s.type);
     return (
-      await fs.readdir(path.join(engine.dir(s), folder)).catch(() => [])
+      await fs.readdir(await engine.file(s, folder)).catch((e) => {
+        if (e.code === "ENOENT") return [];
+        throw e;
+      })
     ).filter((n) => /\.jar(?:\.disabled)?$/.test(n));
   });
   app.get("/api/servers/:id/mods/search", async (req) =>
@@ -846,9 +898,9 @@ export async function createApp(
     if (check.status === "Incompatible") return { installed: false, check };
     if ((req.query as any).confirm !== "true")
       return { installed: false, check };
-    const dir = path.join(engine.dir(s), contentFolder(s.type));
+    const dir = await engine.file(s, contentFolder(s.type));
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, name), buffer, { flag: "wx" });
+    await fs.writeFile(await noSymlinks(dir, name), buffer, { flag: "wx" });
     return { installed: true, check };
   });
   app.delete("/api/servers/:id/mods", async (req) => {
@@ -875,19 +927,19 @@ export async function createApp(
     const name = safeName(b.name);
     if (!/\.jar(?:\.disabled)?$/.test(name))
       throw new Error("Invalid mod filename");
-    const dir = path.join(engine.dir(s), contentFolder(s.type));
+    const dir = await engine.file(s, contentFolder(s.type));
     const next = name.endsWith(".disabled")
       ? name.slice(0, -9)
       : name + ".disabled";
     await fs
-      .access(path.join(dir, next))
+      .access(await noSymlinks(dir, next))
       .then(() => {
         throw new Error("Destination already exists");
       })
       .catch((e: any) => {
         if (e.code !== "ENOENT") throw e;
       });
-    await fs.rename(await noSymlinks(dir, name), path.join(dir, next));
+    await fs.rename(await noSymlinks(dir, name), await noSymlinks(dir, next));
     return { ok: true };
   });
   const client = path.resolve("dist/client");

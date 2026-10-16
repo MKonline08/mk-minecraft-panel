@@ -1,6 +1,7 @@
 import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs/promises";
+import type { BackupSchedule, Announcements } from "./backup-settings.js";
 export const TYPES = [
   "VANILLA",
   "PAPER",
@@ -50,6 +51,9 @@ export type Server = {
   retention: number;
   lastBackup: string | null;
   image: string;
+  backupSchedule?: BackupSchedule;
+  announcements?: Announcements;
+  nextBackupAt?: string | null;
 };
 export type Job = {
   id: string;
@@ -60,6 +64,23 @@ export type Job = {
   created: string;
   updated: string;
   payload: Record<string, unknown>;
+  stage?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  bytesProcessed?: number;
+  totalBytes?: number;
+  archive?: string;
+  archiveSize?: number;
+  verified?: boolean;
+  wasRunning?: boolean;
+  recovery?: { attempted: boolean; error?: string };
+  error?: string;
+  announcementEvents?: {
+    key: string;
+    at: string;
+    status: "attempted" | "sent" | "failed" | "skipped";
+    error?: string;
+  }[];
 };
 export const defaults: Settings = {
   difficulty: "normal",
@@ -105,8 +126,12 @@ export function safePath(root: string, relative: string) {
 }
 export async function noSymlinks(root: string, relative: string) {
   const p = safePath(root, relative);
-  let current = path.resolve(root);
-  for (const part of path.relative(root, p).split(path.sep).filter(Boolean)) {
+  // Include ancestors of root: callers often pass a nested server folder.
+  let current = path.parse(p).root;
+  for (const part of path
+    .relative(current, p)
+    .split(path.sep)
+    .filter(Boolean)) {
     current = path.join(current, part);
     try {
       if ((await fs.lstat(current)).isSymbolicLink())

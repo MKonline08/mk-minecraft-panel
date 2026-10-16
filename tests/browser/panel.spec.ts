@@ -121,7 +121,7 @@ test("populated dashboard, appearance editor and console render on desktop and p
     }),
   );
   await page.route("**/api/jobs", (route) => route.fulfill({ json: [] }));
-  await page.route("**/api/servers/example-server/logs", (route) =>
+  await page.route("**/api/servers/example-server/logs*", (route) =>
     route.fulfill({
       json: {
         text: 'Example console fixture\n[Server thread/INFO]: Done! For help, type "help"',
@@ -165,8 +165,13 @@ test("populated dashboard, appearance editor and console render on desktop and p
     return route.fulfill({ json: examples[1] });
   });
   await page.getByRole("button", { name: "All servers" }).click();
-  await page.getByRole("button", { name: "Open Modded Adventure · Demo" }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).last().click();
+  await page
+    .getByRole("button", { name: "Open Modded Adventure · Demo" })
+    .click();
+  await page
+    .getByRole("button", { name: "Settings", exact: true })
+    .last()
+    .click();
   await expect(page.getByText("Server memory: 4 GB")).toBeVisible();
   await page.getByRole("slider").fill("2");
   await page.getByRole("button", { name: "Save settings" }).click();
@@ -178,16 +183,26 @@ test("populated dashboard, appearance editor and console render on desktop and p
     examples.splice(1, 1);
     return route.fulfill({ json: { ok: true } });
   });
-  await page.getByRole("button", { name: "Delete server", exact: true }).click();
-  const confirm = page.getByRole("button", { name: "Delete server permanently" });
+  await page
+    .getByRole("button", { name: "Delete server", exact: true })
+    .click();
+  const confirm = page.getByRole("button", {
+    name: "Delete server permanently",
+  });
   await expect(confirm).toBeDisabled();
-  await page.getByLabel("Type Modded Adventure · Demo to confirm").fill("wrong");
+  await page
+    .getByLabel("Type Modded Adventure · Demo to confirm")
+    .fill("wrong");
   await expect(confirm).toBeDisabled();
-  await page.getByLabel("Type Modded Adventure · Demo to confirm").fill("Modded Adventure · Demo");
+  await page
+    .getByLabel("Type Modded Adventure · Demo to confirm")
+    .fill("Modded Adventure · Demo");
   await confirm.click();
   await expect.poll(() => deleteName).toBe("Modded Adventure · Demo");
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Modded Adventure · Demo" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Open Modded Adventure · Demo" }),
+  ).toHaveCount(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

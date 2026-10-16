@@ -5,10 +5,18 @@ import type { Store } from "./store.js";
 import type { Engine } from "./docker.js";
 import type { Job, Server } from "./core.js";
 import { noSymlinks, safeName } from "./core.js";
-import { extractZip, worldRoot, zipFolder } from "./archives.js";
+import { extractZip, worldRoot, zipFolder, verifyZip } from "./archives.js";
 import { resolveMods, installMods } from "./mods.js";
+import {
+  announcements,
+  renderAnnouncement,
+  nextBackup,
+  nextCalendar,
+} from "./backup-settings.js";
 export class Jobs {
   active = false;
+  preparing = false;
+  scheduling = false;
   closed = false;
   deleting = new Set<string>();
   fileMutations = new Set<string>();
@@ -21,7 +29,11 @@ export class Jobs {
   ) {
     for (const j of store.unfinishedJobs()) {
       if (j.status === "running") {
-        if (
+        if (j.kind === "backup") {
+          j.status = "queued";
+          j.payload.recover = true;
+          j.message = "Recovering interrupted backup";
+        } else if (
           ["start", "restart", "stop", "delete", "delete-backup"].includes(
             j.kind,
           )
@@ -48,7 +60,8 @@ export class Jobs {
   }
   async drain() {
     this.close();
-    while (this.active) await new Promise((resolve) => setTimeout(resolve, 25));
+    while (this.active || this.preparing || this.scheduling)
+      await new Promise((resolve) => setTimeout(resolve, 25));
   }
   enqueue(id: string, kind: string, payload: Record<string, unknown> = {}) {
     if (this.fileMutations.has(id))
@@ -57,20 +70,53 @@ export class Jobs {
     if (this.store.activeJob(id))
       throw new Error("This server already has an operation in progress");
     const j = this.store.newJob(id, kind, payload);
+    if (kind === "backup") {
+      const s = this.store.server(id);
+      j.payload.dueAt ??= Date.now() + (announcements(s).enabled ? 10000 : 0);
+      j.stage = "countdown";
+      this.store.saveJob(j);
+    }
     void this.tick();
     return j;
   }
   async tick() {
-    if (this.active || this.closed) return;
-    const j = this.store.unfinishedJobs().find((j) => j.status === "queued");
-    if (!j) return;
+    if (this.closed || this.preparing) return;
+    this.preparing = true;
+    let j: Job | undefined;
+    try {
+      for (const candidate of this.store
+        .unfinishedJobs()
+        .filter((j) => j.status === "queued")) {
+        if (candidate.kind === "backup" && !candidate.payload.recover) {
+          await this.countdown(candidate);
+          if (this.closed || this.store.job(candidate.id).status !== "queued")
+            continue;
+          if (Number(candidate.payload.dueAt) > Date.now()) continue;
+        }
+        j ??= candidate;
+      }
+    } catch (e) {
+      console.error("Job preparation:", e);
+    } finally {
+      this.preparing = false;
+    }
+    if (
+      !j ||
+      this.active ||
+      this.closed ||
+      this.store.job(j.id).status !== "queued"
+    )
+      return;
     this.active = true;
+    const job = j;
     const progress = (m: string) => {
-      j.message = m;
-      this.store.saveJob(j);
+      job.message = m;
+      job.stage = m;
+      this.store.saveJob(job);
     };
     try {
       j.status = "running";
+      j.startedAt ??= new Date().toISOString();
       progress("Preparing operation");
       const s =
         j.kind === "delete"
@@ -89,6 +135,7 @@ export class Jobs {
             `backups/${s.id}/${name}`,
           );
           await fs.rm(file, { force: true });
+          this.store.delete(`backup-verified:${s.id}:${name}`);
           const names = (
             await fs
               .readdir(path.join(this.store.root, "backups", s.id))
@@ -101,7 +148,10 @@ export class Jobs {
           current.lastBackup = names.length
             ? (
                 await fs.stat(
-                  path.join(this.store.root, "backups", s.id, names[0]),
+                  await noSymlinks(
+                    this.store.root,
+                    `backups/${s.id}/${names[0]}`,
+                  ),
                 )
               ).mtime.toISOString()
             : null;
@@ -121,7 +171,7 @@ export class Jobs {
           await this.engine.ready(s, progress);
           break;
         case "backup":
-          await this.backup(s, progress, true);
+          await this.backup(s, progress, true, j);
           break;
         case "world":
           await this.replace(s, String(j.payload.file), true, progress);
@@ -149,11 +199,128 @@ export class Jobs {
       );
     } catch (e: any) {
       j.status = "failed";
+      j.error = e.message || "Operation failed";
       progress(e.message || "Operation failed");
     } finally {
+      j.finishedAt = new Date().toISOString();
+      this.store.saveJob(j);
+      if (j.kind === "backup") {
+        const current = this.store.server(j.serverId);
+        if (
+          current.backupSchedule?.mode === "daily" ||
+          current.backupSchedule?.mode === "weekly"
+        ) {
+          current.nextBackupAt = new Date(
+            nextCalendar(current.backupSchedule, Date.now())!,
+          ).toISOString();
+          this.store.save(current);
+        }
+      }
       this.onChange(j.serverId);
       this.active = false;
       if (!this.closed) void this.tick();
+    }
+  }
+  async announce(
+    s: Server,
+    j: Job,
+    key: string,
+    template: string,
+    remaining = 0,
+  ) {
+    if (this.store.job(j.id).status !== j.status) return;
+    const events = (j.announcementEvents ??= []);
+    if (events.some((e) => e.key === key)) return;
+    const event: NonNullable<Job["announcementEvents"]>[number] = {
+      key,
+      at: new Date().toISOString(),
+      status: "attempted",
+    };
+    events.push(event);
+    this.store.saveJob(j); // Persist before sending: a crash must not replay a broadcast.
+    try {
+      if (
+        !announcements(s).enabled ||
+        !["running", "starting", "needs attention"].includes(
+          (await this.engine.state(s)).status,
+        )
+      ) {
+        event.status = "skipped";
+      } else {
+        if (this.store.job(j.id).status !== j.status) return;
+        await this.engine.command(
+          s,
+          "say " +
+            renderAnnouncement(
+              template,
+              s.name,
+              remaining,
+              j.startedAt ? (Date.now() - Date.parse(j.startedAt)) / 1000 : 0,
+            ),
+        );
+        event.status = "sent";
+      }
+    } catch (e: any) {
+      event.status = "failed";
+      event.error = e.message;
+    }
+    const latest = this.store.job(j.id);
+    if (latest.status !== j.status) {
+      latest.announcementEvents = events;
+      this.store.saveJob(latest);
+    } else this.store.saveJob(j);
+  }
+  async countdown(j: Job) {
+    const s = this.store.server(j.serverId);
+    if (!j.payload.prepared) {
+      try {
+        if (
+          !j.payload.scheduled &&
+          (!announcements(s).enabled ||
+            !["running", "starting", "needs attention"].includes(
+              (await this.engine.state(s)).status,
+            ))
+        )
+          j.payload.dueAt = Date.now();
+      } catch {
+        if (!j.payload.scheduled) j.payload.dueAt = Date.now();
+      }
+      if (this.store.job(j.id).status !== "queued") return;
+      j.payload.prepared = true;
+      this.store.saveJob(j);
+    }
+    const remaining = Math.max(
+      0,
+      Math.ceil((Number(j.payload.dueAt) - Date.now()) / 1000),
+    );
+    j.message = `Backup in ${remaining} seconds. Players must reconnect after restart.`;
+    j.stage = "countdown";
+    this.store.saveJob(j);
+    const settings = announcements(s);
+    const warnings = j.payload.scheduled ? settings.warnings : [10];
+    const eligible = [...new Set(warnings)]
+      .sort((a, b) => a - b)
+      .find((seconds) => remaining > 0 && remaining <= seconds);
+    if (eligible !== undefined)
+      await this.announce(
+        s,
+        j,
+        `warning:${eligible}`,
+        settings.warning,
+        remaining,
+      );
+  }
+  cancelCountdown(id: string) {
+    for (const j of this.store
+      .unfinishedJobs()
+      .filter((j) => j.serverId === id && j.kind === "backup")) {
+      if (j.status !== "queued" || j.payload.recover)
+        throw new Error("Wait for the backup to finish");
+      j.status = "failed";
+      j.stage = "cancelled";
+      j.message = "Backup countdown cancelled because settings changed";
+      j.finishedAt = new Date().toISOString();
+      this.store.saveJob(j);
     }
   }
   async removeServer(
@@ -186,39 +353,144 @@ export class Jobs {
       this.deleting.delete(s.id);
     }
   }
-  async backup(s: Server, progress: (s: string) => void, restart: boolean) {
-    const state = await this.engine.state(s);
-    const running = ["running", "starting", "needs attention"].includes(
-      state.status,
-    );
-    progress("Stopping Minecraft for a consistent backup");
-    await this.engine.stop(s);
-    const folder = path.join(this.store.root, "backups", s.id);
+  async backup(
+    s: Server,
+    progress: (s: string) => void,
+    restart: boolean,
+    job?: Job,
+  ) {
+    const folder = await noSymlinks(this.store.root, `backups/${s.id}`);
     await fs.mkdir(folder, { recursive: true });
-    const name =
-      new Date().toISOString().replace(/[:.]/g, "-") +
-      "-" +
-      randomUUID().slice(0, 8) +
-      ".zip";
-    progress("Creating backup");
-    await fs.writeFile(
-      path.join(this.engine.dir(s), ".mk-settings.json"),
-      JSON.stringify({ settings: s.settings, motd: s.motd, seed: s.seed }),
-    );
-    await zipFolder(this.engine.dir(s), path.join(folder, name));
-    const current = this.store.server(s.id);
-    current.lastBackup = new Date().toISOString();
-    this.store.save(current);
-    const files = (await fs.readdir(folder))
-      .filter((n) => n.endsWith(".zip"))
-      .sort()
-      .reverse();
-    for (const n of files.slice(s.retention)) await fs.rm(path.join(folder, n));
-    if (restart && running) {
-      progress("Restarting after backup");
-      await this.engine.start(s, progress);
-      await this.engine.ready(s, progress);
+    const dir = await this.engine.file(s, "");
+    let running = job?.wasRunning ?? false;
+    let failure: Error | undefined;
+    let name = job?.archive ?? "";
+    try {
+      if (job?.payload.recover) {
+        for (const entry of await fs.readdir(folder, { withFileTypes: true }))
+          if (entry.isFile() && entry.name.endsWith(".partial"))
+            await fs.rm(await noSymlinks(folder, entry.name));
+        if (!job.verified)
+          throw new Error(
+            "Panel restarted during backup; incomplete backup discarded",
+          );
+        progress("Verifying recovered backup");
+        await verifyZip(await noSymlinks(folder, safeName(name)));
+      } else {
+        running = ["running", "starting", "needs attention"].includes(
+          (await this.engine.state(s)).status,
+        );
+        if (job) {
+          job.wasRunning = running;
+          this.store.saveJob(job);
+        }
+        if (job)
+          await this.announce(s, job, "shutdown", announcements(s).shutdown);
+        progress("Stopping Minecraft for a consistent backup");
+        await this.engine.stop(s);
+        name =
+          new Date().toISOString().replace(/[:.]/g, "-") +
+          "-" +
+          randomUUID().slice(0, 8) +
+          ".zip";
+        if (job) {
+          job.archive = name;
+          this.store.saveJob(job);
+        }
+        progress("Creating backup");
+        await fs.writeFile(
+          await this.engine.file(s, ".mk-settings.json"),
+          JSON.stringify({ settings: s.settings, motd: s.motd, seed: s.seed }),
+        );
+        let savedAt = 0;
+        await zipFolder(dir, await noSymlinks(folder, name), {
+          stage: progress,
+          progress: (bytes, total) => {
+            if (!job) return;
+            job.bytesProcessed = bytes;
+            job.totalBytes = total;
+            if (Date.now() - savedAt > 500 || bytes === total) {
+              savedAt = Date.now();
+              this.store.saveJob(job);
+            }
+          },
+        });
+        const stat = await fs.stat(await noSymlinks(folder, name));
+        const size = stat.size;
+        this.store.set(
+          `backup-verified:${s.id}:${name}`,
+          JSON.stringify({
+            verifiedAt: new Date().toISOString(),
+            size,
+            mtime: stat.mtimeMs,
+          }),
+        );
+        if (job) {
+          job.verified = true;
+          job.archiveSize = size;
+          this.store.saveJob(job);
+        }
+        const current = this.store.server(s.id);
+        current.lastBackup = new Date().toISOString();
+        this.store.save(current);
+        const files = (await fs.readdir(folder))
+          .filter((n) => n.endsWith(".zip"))
+          .sort()
+          .reverse();
+        for (const n of files.slice(s.retention)) {
+          await fs.rm(await noSymlinks(folder, n));
+          this.store.delete(`backup-verified:${s.id}:${n}`);
+        }
+      }
+    } catch (e: any) {
+      failure = e;
+      if (job) {
+        job.error = e.message;
+        progress(`Backup failed: ${e.message}. Recovering server...`);
+      }
+    } finally {
+      if ((restart || failure) && running) {
+        if (job) {
+          job.recovery = { attempted: true };
+          this.store.saveJob(job);
+        }
+        try {
+          progress("Restarting after backup");
+          await this.engine.start(s, progress);
+          await this.engine.ready(s, progress);
+        } catch (e: any) {
+          if (job) {
+            job.recovery = { attempted: true, error: e.message };
+            this.store.saveJob(job);
+          }
+          failure = new Error(
+            [failure?.message, `Server restart failed: ${e.message}`]
+              .filter(Boolean)
+              .join("; "),
+          );
+        }
+      }
     }
+    if (job)
+      await this.announce(
+        s,
+        job,
+        failure ? "failure" : "complete",
+        failure ? announcements(s).failure : announcements(s).complete,
+      );
+    if (
+      job &&
+      failure &&
+      announcements(s).enabled &&
+      job.announcementEvents?.find((e) => e.key === "failure")?.status !==
+        "sent"
+    )
+      this.store.set(
+        `backup-notice:${s.id}`,
+        JSON.stringify({ jobId: job.id, retryAt: Date.now() + 30000 }),
+      );
+    if (!failure) this.store.delete(`backup-notice:${s.id}`);
+    if (failure) throw failure;
     return name;
   }
   async replace(
@@ -227,10 +499,14 @@ export class Jobs {
     world: boolean,
     progress: (s: string) => void,
   ) {
-    const staging = path.join(this.store.root, "staging", randomUUID());
+    const staging = await noSymlinks(
+      this.store.root,
+      `staging/${randomUUID()}`,
+    );
     await fs.mkdir(staging, { recursive: true });
     try {
       progress("Validating archive");
+      await verifyZip(file, () => {}, 8 * 1024 ** 3);
       await extractZip(file, staging);
       const source = world ? await worldRoot(staging) : staging;
       if (
@@ -242,11 +518,10 @@ export class Jobs {
       )
         throw new Error("This is not a full MK server backup");
       await this.backup(s, progress, false);
-      const dir = this.engine.dir(s);
-      const journal = path.join(
+      const dir = await this.engine.file(s, "");
+      const journal = await noSymlinks(
         this.store.root,
-        "staging",
-        s.id + "-previous-" + randomUUID(),
+        `staging/${s.id}-previous-${randomUUID()}`,
       );
       if (world) {
         progress("Installing world");
@@ -254,12 +529,12 @@ export class Jobs {
         try {
           for (const name of ["world", "world_nether", "world_the_end"]) {
             await fs
-              .rename(path.join(dir, name), path.join(journal, name))
+              .rename(await this.engine.file(s, name), path.join(journal, name))
               .catch((e: any) => {
                 if (e.code !== "ENOENT") throw e;
               });
           }
-          await fs.rename(source, path.join(dir, "world"));
+          await fs.rename(source, await this.engine.file(s, "world"));
         } catch (e) {
           for (const name of await fs.readdir(journal))
             await fs.rename(path.join(journal, name), path.join(dir, name));
@@ -272,7 +547,7 @@ export class Jobs {
           await fs.rename(staging, dir);
           const saved = JSON.parse(
             await fs
-              .readFile(path.join(dir, ".mk-settings.json"), "utf8")
+              .readFile(await this.engine.file(s, ".mk-settings.json"), "utf8")
               .catch(() => "{}"),
           );
           const current = this.store.server(s.id);
@@ -298,30 +573,77 @@ export class Jobs {
     }
   }
   async schedule() {
-    if (this.closed) return;
+    if (this.closed || this.scheduling) return;
+    this.scheduling = true;
     try {
-      for (const s of this.store.servers())
+      for (const s of this.store.servers()) {
+        const notice = JSON.parse(
+          this.store.get(`backup-notice:${s.id}`) || "null",
+        );
         if (
-          !this.deleting.has(s.id) &&
-          !this.fileMutations.has(s.id) &&
-          s.backupHours &&
-          Date.now() - Date.parse(s.lastBackup || s.created) >
-            s.backupHours * 3600000 &&
-          !this.store
-            .jobs()
-            .some(
-              (j) =>
-                j.serverId === s.id && ["running", "queued"].includes(j.status),
-            )
+          notice &&
+          Date.now() >= notice.retryAt &&
+          !this.store.activeJob(s.id)
         ) {
-          const last = this.store
-            .jobs()
-            .find((j) => j.serverId === s.id && j.kind === "backup");
-          if (!last || Date.now() - Date.parse(last.updated) > 3600000)
-            this.enqueue(s.id, "backup");
+          try {
+            if (
+              announcements(s).enabled &&
+              (await this.engine.state(s)).status === "running"
+            ) {
+              const j = this.store.job(notice.jobId);
+              const key = `failure-recovered:${notice.retryAt}`;
+              await this.announce(s, j, key, announcements(s).failure);
+              if (
+                j.announcementEvents?.find((e) => e.key === key)?.status ===
+                "sent"
+              )
+                this.store.set(`backup-notice:${s.id}`, "null");
+              else
+                this.store.set(
+                  `backup-notice:${s.id}`,
+                  JSON.stringify({ ...notice, retryAt: Date.now() + 60000 }),
+                );
+            }
+          } catch {
+            /* A stopped/unreachable server can be retried on a later tick. */
+          }
         }
+        const due = nextBackup(s);
+        if (due === null) continue;
+        if (
+          (s.backupSchedule?.mode === "daily" ||
+            s.backupSchedule?.mode === "weekly") &&
+          !s.nextBackupAt
+        ) {
+          s.nextBackupAt = new Date(due).toISOString();
+          this.store.save(s);
+        }
+        const lead = announcements(s).enabled
+          ? Math.max(0, ...announcements(s).warnings) * 1000
+          : 0;
+        if (
+          Date.now() < due - lead ||
+          this.deleting.has(s.id) ||
+          this.fileMutations.has(s.id) ||
+          this.store.activeJob(s.id)
+        )
+          continue;
+        const last = this.store
+          .jobs()
+          .find(
+            (j) =>
+              j.serverId === s.id &&
+              j.kind === "backup" &&
+              j.status === "failed" &&
+              j.stage !== "cancelled",
+          );
+        if (last && Date.now() - Date.parse(last.updated) < 3600000) continue;
+        this.enqueue(s.id, "backup", { scheduled: true, dueAt: due });
+      }
     } catch (e) {
       console.error("Backup scheduler:", e);
+    } finally {
+      this.scheduling = false;
     }
   }
 }
