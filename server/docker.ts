@@ -279,6 +279,8 @@ export class Engine {
     return logPage(demux(raw), epoch, cursor);
   }
   async command(s: Server, command: string) {
+    const broadcast = /^say\s+/.test(command);
+    const requestedAt = Date.now();
     const c = await this.container(s);
     if (!c || !(await c.inspect()).State.Running)
       throw new Error("Server is not running");
@@ -290,7 +292,10 @@ export class Engine {
         "RCON is disabled in server.properties; enable it and restart to use console and player controls",
       );
     const exec = await c.exec({
-      Cmd: ["rcon-cli", command],
+      // Some Forge versions deliver say but leave its RCON reply empty.
+      // Bound the client process itself so closing the attach stream cannot
+      // leave a waiting rcon-cli process behind inside Minecraft's container.
+      Cmd: ["timeout", "-k", "1", broadcast ? "3" : "12", "rcon-cli", command],
       Env: [
         `RCON_PASSWORD=${config["rcon.password"] ?? (await this.password(s))}`,
         `RCON_PORT=${config["rcon.port"] || "25575"}`,
@@ -323,8 +328,32 @@ export class Engine {
         reject(error);
       });
     });
-    if ((await exec.inspect()).ExitCode !== 0)
-      throw new Error(text || "Command failed");
+    const exit = (await exec.inspect()).ExitCode;
+    if (exit === 124 && broadcast) {
+      const raw = (await c.logs({
+        stdout: true,
+        stderr: true,
+        timestamps: true,
+        since: Math.floor(requestedAt / 1000),
+        tail: 2000,
+      })) as Buffer;
+      const plain = (value: string) =>
+        value.replace(/\x1b\[[0-9;]*m/g, "").replace(/§[0-9a-fk-or]/gi, "");
+      const expected = plain(command.slice(4));
+      const delivered = demux(raw)
+        .split("\n")
+        .some((line) => {
+          const match = /^(\S+) (.*)$/.exec(line);
+          return (
+            match &&
+            Date.parse(match[1]) >= requestedAt &&
+            /\[Rcon\]/i.test(match[2]) &&
+            plain(match[2]).endsWith(expected)
+          );
+        });
+      if (delivered) return "Announcement delivered (empty RCON response)";
+    }
+    if (exit !== 0) throw new Error(text || "Command failed");
     return text;
   }
 }

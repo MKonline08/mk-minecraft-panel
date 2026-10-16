@@ -18,7 +18,62 @@ import { backupList } from "../server/workspace.js";
 import { logPage, cursorSince } from "../server/console.js";
 import { createApp } from "../server/app.js";
 import { PlayerTracker } from "../server/players.js";
+import { PassThrough } from "node:stream";
 process.env.NODE_ENV = "test";
+
+test("Forge empty broadcast replies require fresh delivery evidence and leave no unbounded client process", async () => {
+  const f = await fixture();
+  let argv: string[] = [];
+  let fresh = true;
+  try {
+    f.engine.container = async () =>
+      ({
+        inspect: async () => ({ State: { Running: true } }),
+        exec: async (options: any) => {
+          argv = options.Cmd;
+          return {
+            start: async () => {
+              const stream = new PassThrough();
+              setImmediate(() => stream.end());
+              return stream;
+            },
+            inspect: async () => ({ ExitCode: 124 }),
+          };
+        },
+        logs: async () =>
+          Buffer.from(
+            `${fresh ? new Date(Date.now() + 10).toISOString() : "2000-01-01T00:00:00Z"} [Server thread/INFO]: [Not Secure] [Rcon] Backup started\n`,
+          ),
+      }) as any;
+    f.engine.docker.modem.demuxStream = ((
+      stream: PassThrough,
+      out: PassThrough,
+    ) => stream.pipe(out)) as any;
+    assert.match(
+      await Engine.prototype.command.call(f.engine, f.s, "say Backup started"),
+      /Announcement delivered/,
+    );
+    assert.deepEqual(argv, [
+      "timeout",
+      "-k",
+      "1",
+      "3",
+      "rcon-cli",
+      "say Backup started",
+    ]);
+    fresh = false;
+    await assert.rejects(
+      Engine.prototype.command.call(f.engine, f.s, "say Backup started"),
+      /Command failed/,
+    );
+    await assert.rejects(
+      Engine.prototype.command.call(f.engine, f.s, "list"),
+      /Command failed/,
+    );
+  } finally {
+    await f.close();
+  }
+});
 
 const server = (): Server => ({
   id: randomUUID(),
