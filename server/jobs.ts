@@ -359,13 +359,15 @@ export class Jobs {
     restart: boolean,
     job?: Job,
   ) {
-    const folder = await noSymlinks(this.store.root, `backups/${s.id}`);
-    await fs.mkdir(folder, { recursive: true });
-    const dir = await this.engine.file(s, "");
+    let folder = "",
+      dir = "";
     let running = job?.wasRunning ?? false;
     let failure: Error | undefined;
     let name = job?.archive ?? "";
     try {
+      folder = await noSymlinks(this.store.root, `backups/${s.id}`);
+      await fs.mkdir(folder, { recursive: true });
+      dir = await this.engine.file(s, "");
       if (job?.payload.recover) {
         for (const entry of await fs.readdir(folder, { withFileTypes: true }))
           if (entry.isFile() && entry.name.endsWith(".partial"))

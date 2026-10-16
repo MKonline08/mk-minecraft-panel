@@ -17,6 +17,7 @@ import { zipFolder, verifyZip } from "../server/archives.js";
 import { backupList } from "../server/workspace.js";
 import { logPage, cursorSince } from "../server/console.js";
 import { createApp } from "../server/app.js";
+import { PlayerTracker } from "../server/players.js";
 process.env.NODE_ENV = "test";
 
 const server = (): Server => ({
@@ -576,6 +577,85 @@ test("server-directory symlinks cannot redirect configuration, backup or nested 
     );
     assert.deepEqual(await fs.readdir(target), []);
   } finally {
+    await f.close();
+  }
+});
+
+test("recovery still restarts Minecraft when its backup directory is inaccessible", async () => {
+  const f = await fixture();
+  try {
+    const outside = path.join(f.root, "outside-backups");
+    await fs.mkdir(outside);
+    await fs.mkdir(path.join(f.root, "backups"));
+    await fs.symlink(
+      outside,
+      path.join(f.root, "backups", f.s.id),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const j = f.store.newJob(f.s.id, "backup");
+    j.status = "running";
+    j.wasRunning = true;
+    f.store.saveJob(j);
+    f.setRunning(false);
+    const resumed = new Jobs(f.store, f.engine);
+    clearInterval(resumed.timer);
+    await resumed.tick();
+    await resumed.drain();
+    assert.equal(f.store.job(j.id).status, "failed");
+    assert.equal(f.starts, 1);
+    assert.deepEqual(await fs.readdir(outside), []);
+  } finally {
+    await f.close();
+  }
+});
+
+test("failed backup notification is sent once after the server becomes available", async () => {
+  const f = await fixture();
+  try {
+    const j = f.store.newJob(f.s.id, "backup");
+    j.status = "failed";
+    j.error = "Disk full";
+    f.store.saveJob(j);
+    f.store.set(
+      `backup-notice:${f.s.id}`,
+      JSON.stringify({ jobId: j.id, retryAt: 0 }),
+    );
+    f.setRunning(false);
+    await f.jobs.schedule();
+    assert.equal(f.commands.length, 0);
+    f.setRunning(true);
+    await f.jobs.schedule();
+    await f.jobs.schedule();
+    assert.equal(f.commands.length, 1);
+    assert.match(f.commands[0], /backup failed/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("player requests share a thirty-second cache and concurrent requests send only one command", async (t) => {
+  const f = await fixture();
+  const tracker = new PlayerTracker(f.store, f.engine, false);
+  let now = Date.now(),
+    calls = 0;
+  t.mock.method(Date, "now", () => now);
+  f.engine.container = async () =>
+    ({ inspect: async () => ({ State: { Running: true } }) }) as any;
+  f.engine.command = async () => {
+    calls++;
+    return "There are 0 of a max of 20 players online:";
+  };
+  try {
+    await Promise.all([tracker.get(f.s), tracker.get(f.s)]);
+    assert.equal(calls, 1);
+    now += 29000;
+    await tracker.get(f.s);
+    assert.equal(calls, 1);
+    now += 1000;
+    await tracker.get(f.s);
+    assert.equal(calls, 2);
+  } finally {
+    await tracker.close();
     await f.close();
   }
 });
