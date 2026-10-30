@@ -245,7 +245,7 @@ export async function findWorlds(
 export async function worldName(dir: string) {
   const props = readProperties(
     await fs
-      .readFile(path.join(dir, "server.properties"), "utf8")
+      .readFile(await noSymlinks(dir, "server.properties"), "utf8")
       .catch(() => ""),
   );
   const name = props["level-name"] || "world";

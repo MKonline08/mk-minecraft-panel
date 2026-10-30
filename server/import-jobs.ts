@@ -169,6 +169,8 @@ export async function runImport(
     next.seed = "";
   }
   const password = await jobs.engine.password(s);
+  await worldName(prepared!);
+  next.lastBackup = jobs.store.server(s.id).lastBackup;
   const props = path.join(prepared!, "server.properties");
   await fs.writeFile(
     props,
