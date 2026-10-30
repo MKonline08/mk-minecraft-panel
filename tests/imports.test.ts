@@ -405,6 +405,36 @@ test("trash routes require authentication, stopped state, and an idle server", a
       "x-mk-request": "1",
       cookie: setup.cookies.map((c) => c.name + "=" + c.value).join("; "),
     };
+    assert.equal(
+      (await app.inject({ url: "/api/modpack-settings" })).statusCode,
+      401,
+    );
+    const key = "test-provider-key";
+    assert.equal(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/modpack-settings",
+          headers,
+          payload: { apiKey: key },
+        })
+      ).statusCode,
+      200,
+    );
+    const provider = await app.inject({
+      url: "/api/modpack-settings",
+      headers,
+    });
+    assert.equal(provider.json().curseforgeConfigured, true);
+    assert.equal(provider.body.includes(key), false);
+    assert.equal(store.get("curseforge-api-key"), key);
+    await app.inject({
+      method: "PUT",
+      url: "/api/modpack-settings",
+      headers,
+      payload: { apiKey: "" },
+    });
+    assert.equal(store.get("curseforge-api-key"), undefined);
     const remove = () =>
       app.inject({
         method: "POST",

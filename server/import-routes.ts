@@ -78,12 +78,26 @@ export function importRoutes(
       true,
     );
   });
+  app.get("/api/modpack-settings", async () => ({
+    curseforgeConfigured: !!(
+      store.get("curseforge-api-key") || process.env.CURSEFORGE_API_KEY
+    ),
+    environmentManaged:
+      !!process.env.CURSEFORGE_API_KEY && !store.get("curseforge-api-key"),
+  }));
+  app.put("/api/modpack-settings", async (req) => {
+    const b = z.object({ apiKey: z.string().trim().max(1024) }).parse(req.body);
+    if (b.apiKey && /[\r\n]/.test(b.apiKey)) throw new Error("Invalid API key");
+    if (b.apiKey) store.set("curseforge-api-key", b.apiKey);
+    else store.delete("curseforge-api-key");
+    return { ok: true };
+  });
   app.get("/api/modpacks", async (req) => {
     const q = z
       .object({ query: z.string().max(150).default("") })
       .parse(req.query);
     return remoteJSON(
-      `https://api.modrinth.com/v2/search?facets=${encodeURIComponent(JSON.stringify([["project_type:modpack"]]))}&query=${encodeURIComponent(q.query)}&limit=20`,
+      `https://api.modrinth.com/v2/search?facets=${encodeURIComponent(JSON.stringify([["project_type:modpack"], ["server_side:required", "server_side:optional"]]))}&query=${encodeURIComponent(q.query)}&limit=20`,
     );
   });
   app.get("/api/modpacks/:project/versions", async (req) => {

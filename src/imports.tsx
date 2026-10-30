@@ -49,6 +49,8 @@ export function ImportPanel({
   working,
   kind,
 }: Props & { kind: "world" | "backup" | "modpack" }) {
+  const [apiKey, setApiKey] = useState("");
+  const provider = useLoad<any>(() => api("/modpack-settings"), [s.id]);
   const base = `/servers/${s.id}`;
   const [record, setRecord] = useState<any>(null),
     [progress, setProgress] = useState("");
@@ -114,6 +116,73 @@ export function ImportPanel({
       </p>
       {kind === "modpack" && (
         <>
+          <details className="import-review">
+            <summary>
+              CurseForge settings ·{" "}
+              {provider.data?.curseforgeConfigured
+                ? "Key configured"
+                : "No API key"}
+            </summary>
+            <p>
+              CurseForge export ZIPs usually list mods to download rather than
+              containing their JAR files. Complete server packs with bundled
+              mods need no API key.
+            </p>
+            <p>
+              <a
+                href="https://console.curseforge.com/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Request a CurseForge API key
+              </a>
+              . Save it here, then upload the export again. The key is stored on
+              the panel and is never returned to the browser.
+            </p>
+            <label>
+              CurseForge API key
+              <input
+                aria-label="CurseForge API key"
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={busy || !apiKey.trim()}
+              onClick={async () => {
+                const r = await act(
+                  () => send("/modpack-settings", { apiKey }, "PUT"),
+                  "CurseForge key saved. Upload the pack again.",
+                );
+                if (r) {
+                  setApiKey("");
+                  void provider.reload();
+                }
+              }}
+            >
+              Save API key
+            </button>
+            <button
+              disabled={
+                busy ||
+                !provider.data?.curseforgeConfigured ||
+                provider.data?.environmentManaged
+              }
+              onClick={async () => {
+                if (window.confirm("Remove the saved CurseForge API key?")) {
+                  await act(
+                    () => send("/modpack-settings", { apiKey: "" }, "PUT"),
+                    "Key removed",
+                  );
+                  void provider.reload();
+                }
+              }}
+            >
+              Remove saved key
+            </button>
+          </details>
           <form
             className="inline-form"
             onSubmit={async (e) => {
@@ -323,12 +392,14 @@ export function ImportPanel({
                   </label>
                 ))}
               {record.files
-                .filter((f: any) => !f.urls.length)
+                .filter((f: any) => !f.urls.length || !f.optional)
                 .map((f: any) => (
                   <label className="list-row" key={f.path}>
                     {uploaded.includes(f.path)
                       ? "Verified upload: "
-                      : "Missing file: "}
+                      : f.urls.length
+                        ? "Manual replacement (if download fails): "
+                        : "Missing file: "}
                     {f.path}
                     <input
                       type="file"
