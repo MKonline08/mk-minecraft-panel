@@ -103,7 +103,11 @@ const downloadAgent = new Agent({
     }) as any,
   },
 });
-export async function remote(url: string, cf = false): Promise<Response> {
+export async function remote(
+  url: string,
+  cf = false,
+  apiKey = process.env.CURSEFORGE_API_KEY,
+): Promise<Response> {
   for (let redirect = 0; redirect <= 5; redirect++) {
     const u = new URL(url);
     if (
@@ -119,16 +123,16 @@ export async function remote(url: string, cf = false): Promise<Response> {
       throw new Error("Private-network downloads are forbidden");
     const headers: Record<string, string> = { "User-Agent": USER_AGENT };
     if (cf && u.hostname === "api.curseforge.com") {
-      if (!process.env.CURSEFORGE_API_KEY)
+      if (!apiKey)
         throw new Error(
-          "Set CURSEFORGE_API_KEY on the panel to resolve CurseForge exports",
+          "This CurseForge ZIP contains a download manifest, not the mod files. Add a CurseForge API key in Modpacks → CurseForge settings, or upload a complete server-pack ZIP.",
         );
-      headers["x-api-key"] = process.env.CURSEFORGE_API_KEY;
+      headers["x-api-key"] = apiKey;
     }
     const response = await fetch(u, {
       headers,
       redirect: "manual",
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(300000),
       dispatcher: downloadAgent,
     } as any);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -146,8 +150,8 @@ export async function remote(url: string, cf = false): Promise<Response> {
   }
   throw new Error("Too many download redirects");
 }
-export async function remoteJSON(url: string, cf = false) {
-  const response = await remote(url, cf);
+export async function remoteJSON(url: string, cf = false, apiKey?: string) {
+  const response = await remote(url, cf, apiKey);
   let text = "",
     bytes = 0;
   for await (const chunk of Readable.fromWeb(response.body as any)) {
@@ -341,14 +345,14 @@ export class Imports {
         const deps = Object.keys(m.dependencies || {});
         if (
           deps.some((k) => k !== "minecraft" && !loaders[k]) ||
-          deps.filter((k) => loaders[k]).length !== 1
+          deps.filter((k) => loaders[k]).length > 1
         )
           throw new Error("Unsupported or ambiguous pack loader");
         const loader = deps.find((k) => loaders[k])!;
         record.runtime = runtimeSchema.parse({
-          type: loaders[loader],
+          type: loader ? loaders[loader] : "VANILLA",
           version: m.dependencies.minecraft,
-          loaderVersion: m.dependencies[loader],
+          loaderVersion: loader ? m.dependencies[loader] : undefined,
         });
         const seen = new Set<string>();
         for (const f of m.files) {
@@ -413,6 +417,8 @@ export class Imports {
             await remoteJSON(
               `https://api.curseforge.com/v1/mods/${item.projectID}/files/${item.fileID}`,
               true,
+              this.store.get("curseforge-api-key") ||
+                process.env.CURSEFORGE_API_KEY,
             )
           ).data;
           const hashes: Record<string, string> = {};
@@ -537,7 +543,8 @@ export class Imports {
           if (!file.urls.length)
             throw new Error(`Upload the missing file: ${file.path}`);
           let complete = false;
-          for (const url of file.urls) {
+          let failure = "";
+          for (const url of file.urls.flatMap((url) => [url, url, url])) {
             try {
               const r = await remote(url);
               await boundedWrite(
@@ -548,13 +555,15 @@ export class Imports {
               await checkHashes(target, file.hashes);
               complete = true;
               break;
-            } catch {
+            } catch (error) {
+              failure = (error as Error).message;
               await fs.rm(target, { force: true });
+              await new Promise((resolve) => setTimeout(resolve, 1000));
             }
           }
           if (!complete)
             throw new Error(
-              `Could not download and verify ${file.path}. Upload it manually or retry.`,
+              `Could not download and verify ${file.path}. Upload it manually or retry. ${failure}`,
             );
         }
         await checkHashes(target, file.hashes);
