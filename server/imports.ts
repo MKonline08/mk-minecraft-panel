@@ -510,8 +510,10 @@ export class Imports {
     await fs.mkdir(dest);
     if (
       record.runtime &&
-      JSON.stringify(runtimeSchema.parse(runtime)) !==
-        JSON.stringify(record.runtime)
+      (runtime.type !== record.runtime.type ||
+        runtime.version !== record.runtime.version ||
+        (record.runtime.loaderVersion &&
+          runtime.loaderVersion !== record.runtime.loaderVersion))
     )
       throw new Error("Runtime must match the pack manifest");
     const java = await javaFor(runtime.version);
@@ -573,7 +575,21 @@ export class Imports {
       throw new Error("Pack exceeds expanded size limit");
     // Runtime-generated state must never be imported from another machine.
     for (const entry of await fs.readdir(dest))
-      if (entry.startsWith(".mk-"))
+      if (
+        entry.startsWith(".mk-") ||
+        entry.startsWith(".install-") ||
+        /\.(sh|bat|cmd|ps1)$/i.test(entry) ||
+        [
+          "libraries",
+          ".fabric",
+          ".quilt",
+          "versions",
+          "server.jar",
+          "user_jvm_args.txt",
+          "unix_args.txt",
+          "win_args.txt",
+        ].includes(entry)
+      )
         await fs.rm(path.join(dest, entry), { recursive: true, force: true });
     return {
       dest,

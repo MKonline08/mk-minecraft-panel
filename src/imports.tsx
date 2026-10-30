@@ -255,7 +255,7 @@ export function ImportPanel({
                 Exact loader version
                 <input
                   aria-label="Import loader version"
-                  disabled={!!record.runtime || busy}
+                  disabled={!!record.runtime?.loaderVersion || busy}
                   value={runtime.loaderVersion}
                   onChange={(e) =>
                     setRuntime({ ...runtime, loaderVersion: e.target.value })

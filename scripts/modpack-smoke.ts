@@ -31,7 +31,7 @@ const fixtures = {
   neoforge: {
     minecraft: "1.21.1",
     loader: "neoforge",
-    version: "21.1.80",
+    version: "21.1.218",
     mod: "x7kQWVju",
     sha512:
       "19af89a2075bb10a63884fa853ebf84b02c79dc3242430ecdad056fd764fdcde367a7303276b329df01b0736e2ef264c5d80c7dc92c6aebd244f556a230bb417",

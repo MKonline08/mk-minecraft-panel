@@ -172,7 +172,15 @@ export function importRoutes(
     if (record.state !== "ready") throw new Error("Import is no longer ready");
     if (record.kind === "backup")
       return locked(s, async () => {
-        const runtime = runtimeSchema.parse(record.runtime || b.runtime);
+        const runtime = runtimeSchema.parse(
+          record.runtime
+            ? {
+                ...record.runtime,
+                loaderVersion:
+                  record.runtime.loaderVersion || b.runtime?.loaderVersion,
+              }
+            : b.runtime,
+        );
         const dir = await noSymlinks(store.root, `backups/${s.id}`);
         await fs.mkdir(dir, { recursive: true });
         const name = `uploaded-${randomUUID()}.zip`;
