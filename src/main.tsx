@@ -1,3 +1,4 @@
+import { RepairPanel } from "./repairs.js";
 import { ImportPanel, TrashPanel } from "./imports.js";
 import { api, send, useLoad } from "./api.js";
 import { Console, Backups } from "./backup-console.js";
@@ -465,7 +466,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.4.1</span>
+            MK PANEL <span>v1.5.0</span>
           </small>
         </div>
       </aside>
@@ -558,6 +559,7 @@ function App() {
                 tab={tab}
                 act={act}
                 working={working || activeJobs.some((j) => j.serverId === s.id)}
+                requesting={working}
                 notify={notify}
                 onDelete={() => setDeleting(s)}
                 refreshMs={refreshMs}
@@ -1260,6 +1262,7 @@ function CreateModal({
   );
 }
 type PageProps = {
+  requesting?: boolean;
   s: S;
   tab: string;
   act: (fn: () => Promise<any>, message?: string) => Promise<any>;
@@ -1325,7 +1328,7 @@ function ServerPage(p: PageProps) {
             </button>
             <button
               className="danger-soft"
-              disabled={working || !running}
+              disabled={p.requesting || !running}
               onClick={() =>
                 act(
                   () => send(base + "/actions", { action: "stop" }),
@@ -2156,6 +2159,8 @@ function Files({ s, act, working }: PageProps) {
 }
 function Mods({ s, act, working }: PageProps) {
   const base = "/servers/" + s.id;
+  const [installedQuery, setInstalledQuery] = useState("");
+  const [installedFilter, setInstalledFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [term, setTerm] = useState("");
   const [preview, setPreview] = useState<any[] | null>(null);
@@ -2287,48 +2292,94 @@ function Mods({ s, act, working }: PageProps) {
         )}
       </section>
       <section className="panel">
+        <RepairPanel id={s.id} name={s.name} working={working} act={act} />
         <h2>Installed files</h2>
+        <div className="inline-form">
+          <input
+            aria-label="Search installed mods"
+            placeholder="Search installed mods or plugins…"
+            value={installedQuery}
+            onChange={(e) => setInstalledQuery(e.target.value)}
+          />
+          <select
+            aria-label="Installed mod status"
+            value={installedFilter}
+            onChange={(e) => setInstalledFilter(e.target.value)}
+          >
+            <option value="all">All files</option>
+            <option value="enabled">Enabled</option>
+            <option value="disabled">Disabled</option>
+          </select>
+          <button
+            onClick={() => {
+              setInstalledQuery("");
+              setInstalledFilter("all");
+            }}
+          >
+            Clear search
+          </button>
+        </div>
+        <p className="muted">
+          {
+            (installed.data || []).filter(
+              (name) =>
+                name.toLowerCase().includes(installedQuery.toLowerCase()) &&
+                (installedFilter === "all" ||
+                  (installedFilter === "disabled") ===
+                    name.endsWith(".disabled")),
+            ).length
+          }{" "}
+          of {installed.data?.length || 0} installed files
+        </p>
         <p className="muted">
           Stop the server before uploading, enabling, disabling, or removing
           files. Removing a JAR keeps its settings and saved data folders.
         </p>
         {installed.error && <Notice error>{installed.error}</Notice>}
-        {installed.data?.map((name) => (
-          <div className="list-row" key={name}>
-            <Blocks size={16} />
-            <span className="truncate">{name}</span>
-            <button
-              disabled={working || !["stopped", "failed"].includes(s.status)}
-              onClick={async () => {
-                await act(() => send(base + "/mods/toggle", { name }));
-                void installed.reload();
-              }}
-            >
-              {name.endsWith(".disabled") ? "Enable" : "Disable"}
-            </button>
-            <button
-              className="danger"
-              aria-label={`Remove ${name}`}
-              disabled={working || !["stopped", "failed"].includes(s.status)}
-              onClick={async () => {
-                if (
-                  !window.confirm(
-                    `Remove ${name} from ${s.name}? Only this JAR will be deleted. Its settings and saved data folders will stay. Other plugins may depend on it.`,
+        {installed.data
+          ?.filter(
+            (name) =>
+              name.toLowerCase().includes(installedQuery.toLowerCase()) &&
+              (installedFilter === "all" ||
+                (installedFilter === "disabled") ===
+                  name.endsWith(".disabled")),
+          )
+          .map((name) => (
+            <div className="list-row" key={name}>
+              <Blocks size={16} />
+              <span className="truncate">{name}</span>
+              <button
+                disabled={working || !["stopped", "failed"].includes(s.status)}
+                onClick={async () => {
+                  await act(() => send(base + "/mods/toggle", { name }));
+                  void installed.reload();
+                }}
+              >
+                {name.endsWith(".disabled") ? "Enable" : "Disable"}
+              </button>
+              <button
+                className="danger"
+                aria-label={`Remove ${name}`}
+                disabled={working || !["stopped", "failed"].includes(s.status)}
+                onClick={async () => {
+                  if (
+                    !window.confirm(
+                      `Remove ${name} from ${s.name}? Only this JAR will be deleted. Its settings and saved data folders will stay. Other plugins may depend on it.`,
+                    )
                   )
-                )
-                  return;
-                await act(() =>
-                  api(base + "/mods?name=" + encodeURIComponent(name), {
-                    method: "DELETE",
-                  }),
-                );
-                void installed.reload();
-              }}
-            >
-              <Trash2 size={16} /> Remove
-            </button>
-          </div>
-        ))}
+                    return;
+                  await act(() =>
+                    api(base + "/mods?name=" + encodeURIComponent(name), {
+                      method: "DELETE",
+                    }),
+                  );
+                  void installed.reload();
+                }}
+              >
+                <Trash2 size={16} /> Remove
+              </button>
+            </div>
+          ))}
         {!installed.data?.length && (
           <p className="muted">No files installed yet.</p>
         )}

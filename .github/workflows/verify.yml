@@ -120,6 +120,18 @@ jobs:
           docker run -d --name mk-upgrade -p 8089:8080 -e HOST_DATA_DIR=/tmp/mk-upgrade-data-130 -v /tmp/mk-upgrade-data-130:/data -v /var/run/docker.sock:/var/run/docker.sock mk-panel:test
           for i in $(seq 1 30); do curl -fsS http://localhost:8089/api/health && break || sleep 2; done
           node scripts/upgrade-smoke.mjs verify
+      - name: Verify upgrade from populated v1.4.1 installation
+        run: |
+          docker rm -f mk-upgrade
+          mkdir -p /tmp/mk-upgrade-data-141
+          docker run -d --name mk-upgrade -p 8089:8080 -e HOST_DATA_DIR=/tmp/mk-upgrade-data-141 -v /tmp/mk-upgrade-data-141:/data -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/mkonline08/mk-minecraft-panel:1.4.1
+          for i in $(seq 1 30); do curl -fsS http://localhost:8089/api/health && break || sleep 2; done
+          node scripts/upgrade-smoke.mjs seed
+          docker stop mk-upgrade
+          docker rm mk-upgrade
+          docker run -d --name mk-upgrade -p 8089:8080 -e HOST_DATA_DIR=/tmp/mk-upgrade-data-141 -v /tmp/mk-upgrade-data-141:/data -v /var/run/docker.sock:/var/run/docker.sock mk-panel:test
+          for i in $(seq 1 30); do curl -fsS http://localhost:8089/api/health && break || sleep 2; done
+          node scripts/upgrade-smoke.mjs verify
       - name: Determine unpublished release version
         id: release
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))

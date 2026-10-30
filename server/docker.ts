@@ -16,6 +16,8 @@ import { logPage, cursorSince } from "./console.js";
 export const IMAGE_RELEASE = "2026.9.2";
 const LABEL = "io.mk-panel.server";
 export class Engine {
+  waitingReady = new Set<string>();
+  cancelledStartup = new Set<string>();
   docker: Docker;
   onlineCount?: (id: string) => number | null;
   constructor(
@@ -242,22 +244,42 @@ export class Engine {
     await c.remove();
   }
   async ready(s: Server, progress: (msg: string) => void) {
-    for (let i = 0; i < 240; i++) {
-      const state = await this.state(s);
-      if (state.status === "running") return;
-      if (["stopped", "failed"].includes(state.status))
-        throw new Error(
-          "Minecraft exited during startup. Open Console for the cause, then retry.",
-        );
-      if (i % 12 === 0)
-        progress(
-          `Waiting for Minecraft to be ready (${Math.floor((i * 5) / 60)} min). Console shows download and startup details.`,
-        );
-      await new Promise((r) => setTimeout(r, 5000));
+    this.waitingReady.add(s.id);
+    try {
+      const container = await this.container(s);
+      const initial = container ? await container.inspect() : null;
+      for (let i = 0; i < 240; i++) {
+        if (this.cancelledStartup.has(s.id))
+          throw new Error("Startup cancelled by Stop");
+        const state = await this.state(s);
+        if (state.status === "running") return;
+        if (["stopped", "failed"].includes(state.status))
+          throw new Error(
+            "Minecraft exited during startup. Run Startup diagnosis in Mods/Plugins or inspect the crash report.",
+          );
+        if (container && initial) {
+          const current = await container.inspect();
+          if (
+            current.RestartCount > initial.RestartCount ||
+            current.State.StartedAt !== initial.State.StartedAt
+          )
+            throw new Error(
+              "Minecraft restarted during startup. Run Startup diagnosis; the latest log contains the failure.",
+            );
+        }
+        if (i % 12 === 0)
+          progress(
+            `Waiting for Minecraft to be ready (${Math.floor((i * 5) / 60)} min). Console shows download and startup details.`,
+          );
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+      throw new Error(
+        "Startup did not complete within 20 minutes. Run Startup diagnosis or inspect logs/latest.log.",
+      );
+    } finally {
+      this.waitingReady.delete(s.id);
+      this.cancelledStartup.delete(s.id);
     }
-    throw new Error(
-      "Startup did not complete within 20 minutes. Check Console; the server may still be loading.",
-    );
   }
   async stop(s: Server) {
     const c = await this.container(s);
