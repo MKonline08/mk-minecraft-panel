@@ -18,7 +18,11 @@ import { Store } from "../server/store.js";
 import { Engine } from "../server/docker.js";
 import { Jobs } from "../server/jobs.js";
 import { defaults, type Server } from "../server/core.js";
-import { runImport, rollbackImport } from "../server/import-jobs.js";
+import {
+  runImport,
+  rollbackImport,
+  importedSettings,
+} from "../server/import-jobs.js";
 import { createApp } from "../server/app.js";
 process.env.NODE_ENV = "test";
 async function archive(files: Record<string, string>) {
@@ -457,4 +461,31 @@ test("trash routes require authentication, stopped state, and an idle server", a
     await app.close();
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("legacy numeric settings import safely while unknown values retain panel defaults", () => {
+  const result = importedSettings(
+    { ...defaults },
+    {
+      difficulty: "3",
+      gamemode: "1",
+      "max-players": "30",
+      "view-distance": "10",
+      pvp: "false",
+    },
+  );
+  assert.equal(result.difficulty, "hard");
+  assert.equal(result.gamemode, "creative");
+  assert.equal(result.maxPlayers, 30);
+  assert.equal(result.pvp, false);
+  const invalid = importedSettings(
+    { ...defaults },
+    {
+      difficulty: "",
+      gamemode: "42",
+      "max-players": "not-a-number",
+      pvp: "maybe",
+    },
+  );
+  assert.deepEqual(invalid, defaults);
 });

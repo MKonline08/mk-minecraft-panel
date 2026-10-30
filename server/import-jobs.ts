@@ -18,6 +18,43 @@ import {
 import { treeBytes } from "./trash.js";
 import type { Jobs } from "./jobs.js";
 
+export function importedSettings(
+  current: Server["settings"],
+  properties: Record<string, string>,
+) {
+  let settings = { ...current };
+  const fields = {
+    difficulty: "difficulty",
+    gamemode: "gamemode",
+    maxPlayers: "max-players",
+    viewDistance: "view-distance",
+    pvp: "pvp",
+    whitelist: "white-list",
+  } as const;
+  const legacy: Record<string, string[]> = {
+    difficulty: ["peaceful", "easy", "normal", "hard"],
+    gamemode: ["survival", "creative", "adventure", "spectator"],
+  };
+  for (const [field, key] of Object.entries(fields)) {
+    const raw = properties[key];
+    if (raw === undefined) continue;
+    const value = legacy[field]
+      ? /^\d+$/.test(raw)
+        ? (legacy[field][Number(raw)] ?? raw)
+        : raw.toLowerCase()
+      : typeof (current as any)[field] === "number"
+        ? Number(raw)
+        : raw === "true"
+          ? true
+          : raw === "false"
+            ? false
+            : raw;
+    const candidate = settingsSchema.safeParse({ ...settings, [field]: value });
+    if (candidate.success) settings = candidate.data;
+  }
+  return settings;
+}
+
 async function removeContainer(jobs: Jobs, s: Server) {
   await jobs.engine.stop(s);
   const c = await jobs.engine.container(s);
@@ -185,24 +222,7 @@ export async function runImport(
     mode: 0o600,
   });
   const importedProperties = readProperties(await fs.readFile(props, "utf8"));
-  const settings: Record<string, unknown> = { ...next.settings };
-  for (const [field, key] of Object.entries({
-    difficulty: "difficulty",
-    gamemode: "gamemode",
-    maxPlayers: "max-players",
-    viewDistance: "view-distance",
-    pvp: "pvp",
-    whitelist: "white-list",
-  })) {
-    if (importedProperties[key] !== undefined)
-      settings[field] =
-        typeof (next.settings as any)[field] === "number"
-          ? Number(importedProperties[key])
-          : typeof (next.settings as any)[field] === "boolean"
-            ? importedProperties[key] === "true"
-            : importedProperties[key];
-  }
-  next.settings = settingsSchema.parse(settings);
+  next.settings = importedSettings(next.settings, importedProperties);
   next.motd = importedProperties.motd ?? next.motd;
   next.seed = importedProperties["level-seed"] ?? next.seed;
   const previous = `staging/${s.id}-previous-${record.id}`;

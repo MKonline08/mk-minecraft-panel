@@ -70,7 +70,7 @@ if (process.argv[2] === "seed") {
   console.log("Seeded populated v1.2.1 installation");
 } else {
   const original = JSON.parse(await fs.readFile(manifest, "utf8"));
-  assert.equal((await api("/health")).version, "1.5.0");
+  assert.equal((await api("/health")).version, "1.5.1");
   await api("/auth/login", account);
   const s = await api(`/servers/${original.id}`);
   assert.equal(s.name, "Existing CasaOS world");
