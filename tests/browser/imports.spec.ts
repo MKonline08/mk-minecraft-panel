@@ -29,6 +29,7 @@ test("world and modpack uploads require review and backup uploads do not restore
       whitelist: false,
     },
   };
+  let providerConfigured = false;
   let inspected = "",
     applied: any = null,
     restores = 0;
@@ -37,7 +38,14 @@ test("world and modpack uploads require review and backup uploads do not restore
       url = new URL(request.url()),
       p = url.pathname;
     let value: any = {};
-    if (p.endsWith("/auth/status"))
+    if (p === "/api/modpack-settings") {
+      if (request.method() === "PUT")
+        providerConfigured = !!request.postDataJSON().apiKey;
+      value = {
+        curseforgeConfigured: providerConfigured,
+        environmentManaged: false,
+      };
+    } else if (p.endsWith("/auth/status"))
       value = { authenticated: true, setup: false };
     else if (p === "/api/servers") value = [server];
     else if (p.endsWith("/workspace/settings"))
@@ -80,13 +88,11 @@ test("world and modpack uploads require review and backup uploads do not restore
   await page.goto("/");
   await page.getByRole("button", { name: "Open Import test" }).click();
   await page.getByRole("button", { name: "World", exact: true }).click();
-  await page
-    .getByLabel("Choose world ZIP")
-    .setInputFiles({
-      name: "world.zip",
-      mimeType: "application/zip",
-      buffer: Buffer.from("fixture"),
-    });
+  await page.getByLabel("Choose world ZIP").setInputFiles({
+    name: "world.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("fixture"),
+  });
   await expect(
     page.getByRole("heading", { name: "Review: Fixture pack" }),
   ).toBeVisible();
@@ -96,6 +102,18 @@ test("world and modpack uploads require review and backup uploads do not restore
   await expect.poll(() => applied?.world).toBe("world");
   await page.getByRole("button", { name: "Modpacks", exact: true }).click();
   applied = null;
+  await page.getByText("CurseForge settings · No API key").click();
+  await page
+    .getByLabel("CurseForge API key", { exact: true })
+    .fill("fixture-secret");
+  await page.getByRole("button", { name: "Save API key", exact: true }).click();
+  await expect(
+    page.getByText("CurseForge settings · Key configured"),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("CurseForge API key", { exact: true }),
+  ).toHaveValue("");
+  await page.getByText("CurseForge settings · Key configured").click();
   await page
     .getByLabel("Upload .mrpack or server / CurseForge ZIP")
     .setInputFiles({
@@ -112,13 +130,11 @@ test("world and modpack uploads require review and backup uploads do not restore
     .getByRole("main")
     .getByRole("button", { name: "Backups", exact: true })
     .click();
-  await page
-    .getByLabel("Choose backup ZIP")
-    .setInputFiles({
-      name: "backup.zip",
-      mimeType: "application/zip",
-      buffer: Buffer.from("fixture"),
-    });
+  await page.getByLabel("Choose backup ZIP").setInputFiles({
+    name: "backup.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("fixture"),
+  });
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Add to backups" }).click();
   await expect.poll(() => applied?.confirm).toBe(true);
