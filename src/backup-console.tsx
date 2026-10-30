@@ -1,3 +1,4 @@
+import { ImportPanel } from "./imports.js";
 import React, { useEffect, useRef, useState, useId } from "react";
 import { api, send, useLoad } from "./api.js";
 import { BackupDelete } from "./enhancements.js";
@@ -291,6 +292,7 @@ export function Backups({ s, act, working }: Props) {
   };
   return (
     <div className="panel backups-panel">
+      <ImportPanel s={s as any} act={act} working={working} kind="backup" />
       <div className="section-heading">
         <h2>Backups &amp; restore</h2>
         <button

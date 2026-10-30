@@ -36,6 +36,7 @@ test("server files edit properties, upload replacements and create nested files 
     "plugin.jar": "",
   };
   let uploaded = "";
+  let trash: any[] = [];
   await page.route("**/api/**", async (r) => {
     const url = new URL(r.request().url());
     const p = url.pathname;
@@ -69,7 +70,25 @@ test("server files edit properties, upload replacements and create nested files 
         backupBytes: 0,
         updatedAt: new Date().toISOString(),
       };
-    else if (p.endsWith("/files"))
+    else if (p.endsWith("/trash")) {
+      if (r.request().method() === "POST") {
+        for (const name of r.request().postDataJSON().paths) {
+          trash.push({
+            id: "entry",
+            path: name,
+            bytes: files[name].length,
+            content: files[name],
+            deletedAt: new Date().toISOString(),
+          });
+          delete files[name];
+        }
+      } else if (r.request().method() === "DELETE") trash = [];
+      value = trash;
+    } else if (p.endsWith("/trash/entry/restore")) {
+      files[trash[0].path] = trash[0].content;
+      trash = [];
+      value = { ok: true };
+    } else if (p.endsWith("/files"))
       value = Object.keys(files).map((name) => ({ name, directory: false }));
     else if (p.endsWith("/files/upload")) {
       uploaded = r.request().postData() || "";
@@ -113,13 +132,11 @@ test("server files edit properties, upload replacements and create nested files 
     animations: "disabled",
   });
   await page.getByRole("button", { name: "Close file" }).click();
-  await page
-    .getByLabel("Upload files", { exact: true })
-    .setInputFiles({
-      name: "plugin.jar",
-      mimeType: "application/octet-stream",
-      buffer: Buffer.from("arbitrary upload"),
-    });
+  await page.getByLabel("Upload files", { exact: true }).setInputFiles({
+    name: "plugin.jar",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("arbitrary upload"),
+  });
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toContain("MK Files · Demo");
     expect(dialog.message()).toContain("plugin.jar");
@@ -149,6 +166,20 @@ test("server files edit properties, upload replacements and create nested files 
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBeTruthy();
+  await page.getByLabel("Select .custom", { exact: true }).check();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete selected (1)" }).click();
+  await expect(
+    page.getByRole("button", { name: ".custom", exact: true }),
+  ).toHaveCount(0);
+  await page.getByText(/Trash ·/).click();
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: ".custom", exact: true }),
+  ).toBeVisible();
   await page.screenshot({
     path: `docs/screenshots/files-manager-${info.project.name}.png`,
     fullPage: true,

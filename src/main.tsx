@@ -1,3 +1,4 @@
+import { ImportPanel, TrashPanel } from "./imports.js";
 import { api, send, useLoad } from "./api.js";
 import { Console, Backups } from "./backup-console.js";
 import React, { useState, useEffect, useCallback } from "react";
@@ -464,7 +465,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.3.0</span>
+            MK PANEL <span>v1.4.0</span>
           </small>
         </div>
       </aside>
@@ -534,6 +535,7 @@ function App() {
                   "Settings",
                   "World",
                   "Mods/Plugins",
+                  "Modpacks",
                   "Files",
                   "Backups",
                   "Appearance",
@@ -791,12 +793,12 @@ function App() {
         <CreateModal
           defaults={workspace.data}
           onClose={() => setCreating(false)}
-          onCreated={async (id) => {
+          onCreated={async (id, modpack) => {
             setCreating(false);
             await servers.reload();
             await jobs.reload();
             setSelected(id);
-            setTab("Overview");
+            setTab(modpack ? "Modpacks" : "Overview");
           }}
         />
       )}
@@ -942,7 +944,7 @@ function CreateModal({
 }: {
   defaults: any;
   onClose: () => void;
-  onCreated: (id: string) => void;
+  onCreated: (id: string, modpack?: boolean) => void;
 }) {
   const [step, setStep] = useState(0);
   const [b, setB] = useState({
@@ -955,6 +957,7 @@ function CreateModal({
     motd: "§bMK Minecraft §8• §dYour next adventure",
     autoStart: true,
   });
+  const [forPack, setForPack] = useState(false);
   const [world, setWorld] = useState<File | null>(null);
   const [project, setProject] = useState("");
   const [error, setError] = useState("");
@@ -999,9 +1002,9 @@ function CreateModal({
             project: project.trim(),
           }),
         );
-      if (b.autoStart)
+      if (b.autoStart && !forPack)
         await send(`/servers/${id}/actions`, { action: "start" });
-      onCreated(id);
+      onCreated(id, forPack);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1029,6 +1032,20 @@ function CreateModal({
         </div>
         <h1 id="create-title">Create your server</h1>
         <p>Pick your world. We’ll take care of the setup.</p>
+        <label>
+          <input
+            type="checkbox"
+            checked={forPack}
+            onChange={(e) => {
+              setForPack(e.target.checked);
+              if (e.target.checked) {
+                setWorld(null);
+                setProject("");
+              }
+            }}
+          />{" "}
+          Set up for a modpack (create stopped, then browse or upload a pack)
+        </label>
         <div className="steps">
           {["Basics", "Software", "World & mods", "Review"].map((s, i) => (
             <div key={s} className={step >= i ? "done" : ""}>
@@ -1258,37 +1275,8 @@ function ServerPage(p: PageProps) {
   if (tab === "Console") return <Console {...p} />;
   if (tab === "Appearance") return <Appearance {...p} />;
   if (tab === "Settings") return <ServerSettings {...p} />;
-  if (tab === "World")
-    return (
-      <div className="panel prose">
-        <h2>
-          <Globe size={22} /> Your world
-        </h2>
-        <p>
-          Upload a Java world ZIP containing <code>level.dat</code>. MK
-          validates the archive, stops the server, and makes a backup before
-          replacing your world. Existing Nether and End folders are included in
-          that backup.
-        </p>
-        <UploadBox
-          accept=".zip"
-          disabled={working}
-          label="Choose a world ZIP"
-          action={async (f) => {
-            const data = new FormData();
-            data.append("file", f);
-            await act(
-              () => api(base + "/world", { method: "POST", body: data }),
-              "World import started",
-            );
-          }}
-        />
-        <Notice>
-          After importing, review your mods and start the server. Upload the
-          complete world folder to preserve its dimensions.
-        </Notice>
-      </div>
-    );
+  if (tab === "Modpacks") return <ImportPanel {...p} kind="modpack" />;
+  if (tab === "World") return <ImportPanel {...p} kind="world" />;
   if (tab === "Mods/Plugins") return <Mods {...p} />;
   if (tab === "Files") return <Files {...p} />;
   if (tab === "Backups") return <Backups {...p} />;
@@ -1824,6 +1812,7 @@ function Players({ s, act, working, refreshMs }: PageProps) {
 }
 function Files({ s, act, working }: PageProps) {
   const base = "/servers/" + s.id;
+  const [selected, setSelected] = useState<string[]>([]);
   const [folder, setFolder] = useState("");
   const [file, setFile] = useState("");
   const [text, setText] = useState("");
@@ -1835,6 +1824,7 @@ function Files({ s, act, working }: PageProps) {
   const list = useLoad<any[]>(
     () => api(base + "/files?path=" + encodeURIComponent(folder)),
     [s.id, folder],
+    3000,
   );
   const inFolder = (name: string) => [folder, name].filter(Boolean).join("/");
   const leaveEditor = () =>
@@ -1924,6 +1914,35 @@ function Files({ s, act, working }: PageProps) {
           using; stop the server first when editing those files.
         </Notice>
       )}
+      <TrashPanel s={s} act={act} working={working} />
+      <button
+        disabled={
+          working ||
+          !selected.length ||
+          !["stopped", "failed"].includes(s.status)
+        }
+        onClick={async () => {
+          if (
+            !window.confirm(
+              "Move these paths to trash?\n" + selected.join("\n"),
+            )
+          )
+            return;
+          const r = await act(
+            () => send(base + "/trash", { paths: selected }),
+            "Moved to trash",
+          );
+          if (r) {
+            setSelected([]);
+            setFile("");
+            setText("");
+            setOriginal("");
+            await list.reload();
+          }
+        }}
+      >
+        Delete selected ({selected.length})
+      </button>
       {list.error && <Notice error>{list.error}</Notice>}
       <div className="file-path">
         <button
@@ -2080,34 +2099,49 @@ function Files({ s, act, working }: PageProps) {
           {progress && <p role="status">{progress}</p>}
           <div className="file-list">
             {list.data?.map((e) => (
-              <button
-                className="file-row"
-                disabled={working}
-                key={e.name}
-                onClick={async () => {
-                  const next = inFolder(e.name);
-                  if (e.directory) {
-                    setFolder(next);
-                    setPending([]);
-                  } else {
-                    const r = await act(
-                      () =>
-                        api(base + "/file?path=" + encodeURIComponent(next)),
-                      "File opened",
-                    );
-                    if (r) {
-                      setFile(next);
-                      setText(r.text);
-                      setOriginal(r.text);
-                      setReason(r.readOnly ? r.reason : "");
-                    }
+              <div className="file-select-row" key={e.name}>
+                <input
+                  type="checkbox"
+                  aria-label={"Select " + e.name}
+                  disabled={working || e.name.startsWith(".mk-")}
+                  checked={selected.includes(inFolder(e.name))}
+                  onChange={(event) =>
+                    setSelected(
+                      event.target.checked
+                        ? [...selected, inFolder(e.name)]
+                        : selected.filter((p) => p !== inFolder(e.name)),
+                    )
                   }
-                }}
-              >
-                {e.directory ? <Folder size={18} /> : <FileText size={18} />}
-                <span>{e.name}</span>
-                <ChevronRight size={16} />
-              </button>
+                />
+                <button
+                  className="file-row"
+                  disabled={working}
+                  key={e.name}
+                  onClick={async () => {
+                    const next = inFolder(e.name);
+                    if (e.directory) {
+                      setFolder(next);
+                      setPending([]);
+                    } else {
+                      const r = await act(
+                        () =>
+                          api(base + "/file?path=" + encodeURIComponent(next)),
+                        "File opened",
+                      );
+                      if (r) {
+                        setFile(next);
+                        setText(r.text);
+                        setOriginal(r.text);
+                        setReason(r.readOnly ? r.reason : "");
+                      }
+                    }
+                  }}
+                >
+                  {e.directory ? <Folder size={18} /> : <FileText size={18} />}
+                  <span>{e.name}</span>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
             ))}
             {list.data?.length === 0 && (
               <p className="muted">

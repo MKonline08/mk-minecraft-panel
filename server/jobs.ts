@@ -7,6 +7,10 @@ import type { Job, Server } from "./core.js";
 import { noSymlinks, safeName } from "./core.js";
 import { extractZip, worldRoot, zipFolder, verifyZip } from "./archives.js";
 import { resolveMods, installMods } from "./mods.js";
+import { runImport, rollbackImport } from "./import-jobs.js";
+import { worldName, runtimeSchema } from "./imports.js";
+import { javaFor } from "./catalog.js";
+import { IMAGE_RELEASE } from "./docker.js";
 import {
   announcements,
   renderAnnouncement,
@@ -27,6 +31,11 @@ export class Jobs {
     public store: Store,
     public engine: Engine,
   ) {
+    for (const s of store.servers()) {
+      const raw = store.get(`rollback:${s.id}`);
+      if (raw && JSON.parse(raw).stage !== "installed")
+        store.save({ ...s, recoveryRequired: true });
+    }
     for (const j of store.unfinishedJobs()) {
       if (j.status === "running") {
         if (j.kind === "backup") {
@@ -123,6 +132,12 @@ export class Jobs {
           ? (j.payload.server as Server)
           : this.store.server(j.serverId);
       switch (j.kind) {
+        case "import":
+          await runImport(this, s, j, progress);
+          break;
+        case "import-rollback":
+          await rollbackImport(this, s, progress);
+          break;
         case "delete":
           await this.removeServer(s, j.id, progress);
           break;
@@ -332,7 +347,7 @@ export class Jobs {
       throw new Error("Invalid server ID; files were not deleted");
     this.deleting.add(s.id);
     try {
-      for (const folder of ["servers", "backups", "images"])
+      for (const folder of ["servers", "backups", "images", "trash"])
         await noSymlinks(this.store.root, `${folder}/${s.id}`);
       await this.beforeDelete(s.id);
       progress("Stopping server before deletion");
@@ -344,7 +359,7 @@ export class Jobs {
         await container.remove();
       }
       progress("Deleting server files and backups");
-      for (const folder of ["servers", "backups", "images"]) {
+      for (const folder of ["servers", "backups", "images", "trash"]) {
         const target = await noSymlinks(this.store.root, `${folder}/${s.id}`);
         await fs.rm(target, { recursive: true, force: true });
       }
@@ -402,7 +417,18 @@ export class Jobs {
         progress("Creating backup");
         await fs.writeFile(
           await this.engine.file(s, ".mk-settings.json"),
-          JSON.stringify({ settings: s.settings, motd: s.motd, seed: s.seed }),
+          JSON.stringify({
+            formatVersion: 1,
+            settings: s.settings,
+            motd: s.motd,
+            seed: s.seed,
+            runtime: {
+              type: s.type,
+              version: s.version,
+              loaderVersion: s.loaderVersion,
+            },
+            pack: s.pack,
+          }),
         );
         let savedAt = 0;
         await zipFolder(dir, await noSymlinks(folder, name), {
@@ -526,17 +552,26 @@ export class Jobs {
         `staging/${s.id}-previous-${randomUUID()}`,
       );
       if (world) {
+        const configuredName = await worldName(dir);
         progress("Installing world");
         await fs.mkdir(journal);
         try {
-          for (const name of ["world", "world_nether", "world_the_end"]) {
+          for (const name of [
+            configuredName,
+            configuredName + "_nether",
+            configuredName + "_the_end",
+          ]) {
             await fs
               .rename(await this.engine.file(s, name), path.join(journal, name))
               .catch((e: any) => {
                 if (e.code !== "ENOENT") throw e;
               });
           }
-          await fs.rename(source, await this.engine.file(s, "world"));
+          await fs.mkdir(
+            path.dirname(await this.engine.file(s, configuredName)),
+            { recursive: true },
+          );
+          await fs.rename(source, await this.engine.file(s, configuredName));
         } catch (e) {
           for (const name of await fs.readdir(journal))
             await fs.rename(path.join(journal, name), path.join(dir, name));
@@ -553,6 +588,23 @@ export class Jobs {
               .catch(() => "{}"),
           );
           const current = this.store.server(s.id);
+          if (saved.runtime) {
+            const runtime = runtimeSchema.parse(saved.runtime);
+            if (
+              runtime.type !== s.type ||
+              runtime.version !== s.version ||
+              runtime.loaderVersion !== s.loaderVersion
+            ) {
+              const java = await javaFor(runtime.version);
+              const container = await this.engine.container(s);
+              if (container) await container.remove();
+              Object.assign(current, runtime, {
+                java,
+                image: `itzg/minecraft-server:${IMAGE_RELEASE}-java${java}`,
+              });
+            }
+            current.pack = saved.pack;
+          }
           if (saved.settings) current.settings = saved.settings;
           if (typeof saved.motd === "string") current.motd = saved.motd;
           if (typeof saved.seed === "string") current.seed = saved.seed;

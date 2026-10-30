@@ -8,7 +8,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "npm start",
+    command: "node dist/server/index.js",
     url: "http://127.0.0.1:8080/api/health",
     reuseExistingServer: !process.env.CI,
     env: { DATA_DIR: "data/browser-test", HOST: "127.0.0.1" },

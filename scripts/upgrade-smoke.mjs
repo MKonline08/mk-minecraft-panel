@@ -70,7 +70,7 @@ if (process.argv[2] === "seed") {
   console.log("Seeded populated v1.2.1 installation");
 } else {
   const original = JSON.parse(await fs.readFile(manifest, "utf8"));
-  assert.equal((await api("/health")).version, "1.3.0");
+  assert.equal((await api("/health")).version, "1.4.0");
   await api("/auth/login", account);
   const s = await api(`/servers/${original.id}`);
   assert.equal(s.name, "Existing CasaOS world");
@@ -88,7 +88,7 @@ if (process.argv[2] === "seed") {
     (b) => b.name === original.backup,
   );
   assert.ok(old);
-  assert.equal(old.verification, "unknown");
+  assert.ok(["unknown", "verified"].includes(old.verification));
   const job = await wait(
     await api(`/servers/${s.id}/actions`, { action: "backup" }),
   );

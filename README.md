@@ -10,7 +10,7 @@ Create independent Vanilla, Paper, Spigot, Purpur, Fabric, Forge, NeoForge, and 
 
 ## Installation on CasaOS
 
-Version 1.3.0 adds in-game backup warnings, configurable announcements, daily/weekly schedules with timezones, verified backups and restart recovery, plus an incremental console with noise controls. Existing installations retain their servers and data. Read the [v1.3.0 release and upgrade guide](docs/v1.3.0.md) before updating.
+Version 1.4.0 adds recoverable file deletion, staged world/backup uploads, and modpack installation. See [the v1.4.0 guide](docs/v1.4.0.md). Version 1.3.0 added in-game backup warnings, configurable announcements, daily/weekly schedules with timezones, verified backups and restart recovery, plus an incremental console with noise controls. Existing installations retain their servers and data. Read the [v1.3.0 release and upgrade guide](docs/v1.3.0.md) before updating.
 
 **Remove** remains available beside installed mods and plugins. Stop Minecraft, open **Mods/Plugins → Installed files**, choose Remove and confirm the filename and server. Only that JAR is deleted; plugin settings, accounts, worlds and other data folders stay. Disabled JARs can also be removed. Other plugins may depend on the removed plugin.
 
@@ -54,7 +54,7 @@ Minimum practical starting point: a 64-bit Intel/AMD laptop, working Docker/Casa
 
 **Compatibility labels describe metadata, not a runtime guarantee.** Unknown JAR metadata is shown as Unknown. Forge/NeoForge ranges, loader-specific behavior and arbitrary mod interactions cannot all be validated before startup. Test unfamiliar mod combinations on a separate server and keep backups. Players may need matching mods in their Minecraft clients. Vanilla does not load plugins; Paper/Spigot/Purpur load plugins, while Fabric/Forge/NeoForge/Quilt load mods.
 
-v1 intentionally excludes timed MOTD rotation, CurseForge integration, full modpack import, public administration hosting, multiple admin roles, and automatic Minecraft version upgrades. To change a server's Minecraft version or loader, create a new instance and import a backup of its world only when compatible. Existing Modrinth-managed projects are not silently overwritten by an update.
+The panel excludes timed MOTD rotation, public administration hosting, multiple admin roles, Bedrock conversion, and automatic modpack upgrades. CurseForge export imports require CURSEFORGE_API_KEY; Modrinth browsing needs no key. To change a server's Minecraft version or loader, create a new instance and import a backup of its world only when compatible. Existing Modrinth-managed projects are not silently overwritten by an update.
 
 ## Storage, updates, and recovery
 
@@ -71,7 +71,7 @@ staging/             temporary extraction and interrupted-operation recovery
 
 Keep `HOST_DATA_DIR` equal to the **host** path mounted as `/data`; sibling Minecraft containers need that path. Do not mount a named volume in its place. To move storage, stop all Minecraft containers and the panel, copy the complete folder to the new location, and update both the mount source and `HOST_DATA_DIR`.
 
-Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. After the release is published, change only the existing panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.3.0` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Existing accounts, server registrations, property files, worlds and backups are preserved. Server images are pinned to an itzg release and do not silently change with panel restarts. See the [upgrade guide](docs/v1.3.0.md) for migration defaults and recovery details.
+Before updating, stop your Minecraft servers, stop the panel, and copy the whole data folder to external storage. After the release is published, change only the existing panel image version in CasaOS to `ghcr.io/mkonline08/mk-minecraft-panel:1.4.0` and apply the update. Keep your existing host port (including 8089 if you changed it) and data mount; importing a fresh Compose file may restore the default port 8088. Existing accounts, server registrations, property files, worlds and backups are preserved. Server images are pinned to an itzg release and do not silently change with panel restarts. See the [upgrade guide](docs/v1.3.0.md) for migration defaults and recovery details.
 
 To edit a configuration, open the server → **Files**, open the file, edit it, and click **Save file**. To upload, open the destination folder, choose files, click **Upload**, and confirm any replacements. Files are streamed to temporary files and renamed after completion; a failed transfer preserves the original. An interrupted panel process can leave a `.mk-upload-*` temporary file, which is not applied. Folder and file creation also accept nested relative paths.
 

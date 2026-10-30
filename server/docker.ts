@@ -150,6 +150,10 @@ export class Engine {
     }
   }
   async start(s: Server, progress: (msg: string) => void) {
+    if (s.recoveryRequired)
+      throw new Error(
+        "Import recovery is required. Roll back before starting this server.",
+      );
     let c = await this.container(s);
     if (c) {
       const i = await c.inspect();
@@ -185,6 +189,15 @@ export class Engine {
       `UID=${process.getuid?.() ?? 0}`,
       `GID=${process.getgid?.() ?? 0}`,
     ];
+    if (s.loaderVersion) {
+      const key = {
+        FABRIC: "FABRIC_LOADER_VERSION",
+        QUILT: "QUILT_LOADER_VERSION",
+        FORGE: "FORGE_VERSION",
+        NEOFORGE: "NEOFORGE_VERSION",
+      }[s.type as string];
+      if (key) env.push(`${key}=${s.loaderVersion}`);
+    }
     c = await this.docker.createContainer({
       name: "mk-" + s.id,
       Image: s.image,
