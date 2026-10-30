@@ -167,7 +167,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.4.1" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.5.0" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -466,6 +466,15 @@ export async function createApp(
     const b = z
       .object({ action: z.enum(["start", "stop", "restart", "backup"]) })
       .parse(req.body);
+    if (b.action === "stop" && store.activeJob(s.id)) {
+      if (!engine.waitingReady.has(s.id))
+        throw new Error(
+          "The server is changing files. Stop becomes available during startup verification.",
+        );
+      engine.cancelledStartup.add(s.id);
+      await engine.stop(s);
+      return { ok: true, message: "Startup cancellation requested" };
+    }
     return jobs.enqueue(s.id, b.action);
   });
   app.get("/api/servers/:id/logs", async (req) => {
@@ -893,6 +902,55 @@ export async function createApp(
         throw e;
       })
     ).filter((n) => /\.jar(?:\.disabled)?$/.test(n));
+  });
+  app.get("/api/servers/:id/repairs", async (req) => {
+    const s = target(req),
+      id = store.get(`diagnosis-latest:${s.id}`);
+    return {
+      report: id ? JSON.parse(store.get(`diagnosis:${id}`) || "null") : null,
+      result: JSON.parse(store.get(`repair-result:${s.id}`) || "null"),
+      rollback: !!store.get(`repair-rollback:${s.id}`),
+    };
+  });
+  app.post("/api/servers/:id/repairs/diagnose", async (req) => {
+    const s = target(req);
+    contentFolder(s.type);
+    return jobs.enqueue(s.id, "diagnose");
+  });
+  app.post("/api/servers/:id/repairs/apply", async (req) => {
+    const s = target(req);
+    const b = z
+      .object({
+        confirm: z.literal(true),
+        diagnosisId: z.string().uuid(),
+        proposalId: z.enum(["disable", "update"]),
+      })
+      .parse(req.body);
+    return jobs.enqueue(s.id, "repair", b);
+  });
+  app.post("/api/servers/:id/repairs/rollback", async (req) => {
+    const s = target(req);
+    z.object({ confirm: z.literal(true) }).parse(req.body);
+    return jobs.enqueue(s.id, "repair-rollback");
+  });
+  app.delete("/api/servers/:id/repairs/rollback", async (req) => {
+    const s = target(req);
+    z.object({ confirm: z.literal(true) }).parse(req.body);
+    return fileMutation(s, async () => {
+      if (s.recoveryRequired)
+        throw new Error("Recover the interrupted repair first");
+      if (!["stopped", "failed"].includes((await engine.state(s)).status))
+        throw new Error("Stop Minecraft before discarding rollback files");
+      const raw = store.get(`repair-rollback:${s.id}`);
+      if (raw) {
+        await fs.rm(await noSymlinks(root, JSON.parse(raw).previous), {
+          recursive: true,
+          force: true,
+        });
+        store.delete(`repair-rollback:${s.id}`);
+      }
+      return { ok: true };
+    });
   });
   app.get("/api/servers/:id/mods/search", async (req) =>
     searchMods(String((req.query as any).q || "").slice(0, 100), target(req)),

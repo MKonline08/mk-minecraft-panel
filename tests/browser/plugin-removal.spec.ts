@@ -29,6 +29,8 @@ test("remove a plugin with confirmation on desktop and mobile", async ({
     "VeryLongPluginFilename-to-check-the-mobile-layout.jar.disabled",
   ];
   let deletes = 0;
+  let diagnosed = false,
+    repairs = 0;
   await page.route("**/api/**", async (r) => {
     const url = new URL(r.request().url());
     let value: any = {};
@@ -53,6 +55,35 @@ test("remove a plugin with confirmation on desktop and mobile", async ({
         allocated: 0,
         cpu: 0,
       };
+    else if (url.pathname.endsWith("/repairs/diagnose")) {
+      diagnosed = true;
+      value = { ok: true };
+    } else if (url.pathname.endsWith("/repairs/apply")) {
+      expect(r.request().postDataJSON().confirm).toBe(true);
+      repairs++;
+      value = { ok: true };
+    } else if (url.pathname.endsWith("/repairs"))
+      value = {
+        report: diagnosed
+          ? {
+              id: "report",
+              created: new Date().toISOString(),
+              explanation: "A mod was identified by the crash log",
+              evidence: ["Mod FastLogin failed"],
+              warnings: [],
+              proposals: [
+                {
+                  id: "disable",
+                  kind: "disable",
+                  title: "Disable FastLogin.jar",
+                  files: [
+                    { old: "FastLogin.jar", name: "FastLogin.jar.disabled" },
+                  ],
+                },
+              ],
+            }
+          : null,
+      };
     else if (url.pathname.endsWith("/mods")) {
       if (r.request().method() === "DELETE") {
         expect(url.pathname).toBe("/api/servers/remove-demo/mods");
@@ -66,6 +97,42 @@ test("remove a plugin with confirmation on desktop and mobile", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Open MK Plugins" }).click();
   await page.getByRole("button", { name: "Mods/Plugins", exact: true }).click();
+  await page
+    .getByLabel("Search installed mods", { exact: true })
+    .fill("authme");
+  await expect(
+    page.getByRole("button", { name: "Remove AuthMe.jar", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Remove FastLogin.jar", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await page
+    .getByLabel("Installed mod status", { exact: true })
+    .selectOption("disabled");
+  await expect(
+    page.getByRole("button", { name: "Enable", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Remove AuthMe.jar", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear search", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Diagnose startup", exact: true })
+    .click();
+  await expect(page.getByRole("radio")).toBeVisible();
+  expect(repairs).toBe(0);
+  await page.getByRole("radio").check();
+  page.once("dialog", (d) => d.dismiss());
+  await page
+    .getByRole("button", { name: "Confirm selected repair", exact: true })
+    .click();
+  expect(repairs).toBe(0);
+  page.once("dialog", (d) => d.accept());
+  await page
+    .getByRole("button", { name: "Confirm selected repair", exact: true })
+    .click();
+  await expect.poll(() => repairs).toBe(1);
   const remove = page.getByRole("button", {
     name: "Remove FastLogin.jar",
     exact: true,

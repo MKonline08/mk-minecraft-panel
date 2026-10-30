@@ -121,7 +121,11 @@ export async function searchMods(query: string, s: Server) {
     `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&facets=${encodeURIComponent(facets)}&limit=18`,
   );
 }
-export async function resolveMods(project: string, s: Server) {
+export async function resolveMods(
+  project: string,
+  s: Server,
+  versionId?: string,
+) {
   const items: any[] = [];
   const visited = new Set<string>();
   async function visit(id: string, versionId?: string) {
@@ -181,7 +185,7 @@ export async function resolveMods(project: string, s: Server) {
       }
     }
   }
-  await visit(project);
+  await visit(project, versionId);
   const ids = new Set(items.map((i) => i.project));
   for (const i of items)
     for (const dep of i.dependencies || [])

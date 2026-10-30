@@ -29,6 +29,8 @@ Minimum practical starting point: a 64-bit Intel/AMD laptop, working Docker/Casa
 
 ## Features and behavior
 
+v1.5.0 adds installed-mod search and confirmed startup repair trials with verified backups, startup checks, and rollback. See [the repair guide](docs/v1.5.0.md).
+
 - One isolated Docker container, game port, and data folder per server. Only the game port is published; RCON stays inside the Minecraft container.
 - Lifecycle controls, real CPU/memory values, live console, player/whitelist/operator commands, gameplay settings, and a text configuration editor.
 - The Files tab edits UTF-8 text of any extension (including `server.properties`, extensionless and hidden files), creates files/folders, downloads any file, and uploads multiple files into the selected folder. Uploads have no file-type allowlist or application size cap; available disk space and any proxy limits still apply. Existing-file replacement requires confirmation. Binary files and files over the 16 MB editor limit can be downloaded, edited with a suitable tool, and uploaded again.

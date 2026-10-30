@@ -7,6 +7,7 @@ import type { Job, Server } from "./core.js";
 import { noSymlinks, safeName } from "./core.js";
 import { extractZip, worldRoot, zipFolder, verifyZip } from "./archives.js";
 import { resolveMods, installMods } from "./mods.js";
+import { diagnose, repair, rollbackRepair } from "./repairs.js";
 import { runImport, rollbackImport } from "./import-jobs.js";
 import { worldName, runtimeSchema } from "./imports.js";
 import { javaFor } from "./catalog.js";
@@ -32,6 +33,9 @@ export class Jobs {
     public engine: Engine,
   ) {
     for (const s of store.servers()) {
+      const repairJournal = store.get(`repair-rollback:${s.id}`);
+      if (repairJournal && JSON.parse(repairJournal).phase !== "verified")
+        store.save({ ...s, recoveryRequired: true });
       const raw = store.get(`rollback:${s.id}`);
       if (raw && JSON.parse(raw).stage !== "installed")
         store.save({ ...s, recoveryRequired: true });
@@ -132,6 +136,24 @@ export class Jobs {
           ? (j.payload.server as Server)
           : this.store.server(j.serverId);
       switch (j.kind) {
+        case "diagnose": {
+          progress("Reading startup logs and identifying installed mods");
+          const report = await diagnose(this, s);
+          this.store.set(`diagnosis-latest:${s.id}`, report.id);
+          break;
+        }
+        case "repair":
+          await repair(
+            this,
+            s,
+            String(j.payload.diagnosisId),
+            String(j.payload.proposalId),
+            progress,
+          );
+          break;
+        case "repair-rollback":
+          await rollbackRepair(this, s, progress);
+          break;
         case "import":
           await runImport(this, s, j, progress);
           break;

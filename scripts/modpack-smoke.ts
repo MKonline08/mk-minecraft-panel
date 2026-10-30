@@ -1,3 +1,4 @@
+import { repair, rollbackRepair, inventory } from "../server/repairs.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -134,6 +135,45 @@ try {
     await fs.readFile(path.join(engine.dir(s), "world/mk-pack-marker"), "utf8"),
     "persistent",
   );
+  const repairId = randomUUID();
+  store.set(
+    `diagnosis:${repairId}`,
+    JSON.stringify({
+      id: repairId,
+      serverId: s.id,
+      created: new Date().toISOString(),
+      runtime: JSON.stringify([s.type, s.version, s.loaderVersion]),
+      inventory: await inventory(path.join(engine.dir(s), "mods")),
+      evidence: [
+        "Integration fixture: explicitly selected FerriteCore disable trial",
+      ],
+      explanation: "Integration fixture",
+      warnings: [],
+      proposals: [
+        {
+          id: "disable",
+          kind: "disable",
+          title: "Disable integration mod",
+          files: [{ old: file.filename, name: file.filename + ".disabled" }],
+          clientRequired: false,
+        },
+      ],
+    }),
+  );
+  await repair(jobs, s, repairId, "disable", log);
+  assert.equal(
+    JSON.parse(store.get(`repair-result:${s.id}`)!).status,
+    "verified",
+  );
+  await fs.access(
+    path.join(engine.dir(s), "mods", file.filename + ".disabled"),
+  );
+  await rollbackRepair(jobs, store.server(s.id), log);
+  s = store.server(s.id);
+  await fs.access(path.join(engine.dir(s), "mods", file.filename));
+  await engine.start(s, log);
+  await engine.ready(s, log);
+  await engine.stop(s);
   const backup = await jobs.backup(s, log, false);
   await fs.writeFile(
     path.join(engine.dir(s), "world/mk-pack-marker"),
