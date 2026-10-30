@@ -132,7 +132,7 @@ export async function remote(
     const response = await fetch(u, {
       headers,
       redirect: "manual",
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(300000),
       dispatcher: downloadAgent,
     } as any);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -544,7 +544,7 @@ export class Imports {
             throw new Error(`Upload the missing file: ${file.path}`);
           let complete = false;
           let failure = "";
-          for (const url of file.urls) {
+          for (const url of file.urls.flatMap((url) => [url, url, url])) {
             try {
               const r = await remote(url);
               await boundedWrite(
@@ -558,6 +558,7 @@ export class Imports {
             } catch (error) {
               failure = (error as Error).message;
               await fs.rm(target, { force: true });
+              await new Promise((resolve) => setTimeout(resolve, 1000));
             }
           }
           if (!complete)
