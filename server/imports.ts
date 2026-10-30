@@ -204,6 +204,19 @@ export async function normalizedRoot(dir: string) {
     const entries = (await fs.readdir(dir, { withFileTypes: true })).filter(
       (e) => e.name !== "__MACOSX",
     );
+    if (
+      entries.some((e) =>
+        [
+          "mods",
+          "config",
+          "server.properties",
+          "level.dat",
+          "modrinth.index.json",
+          "manifest.json",
+        ].includes(e.name),
+      )
+    )
+      return dir;
     if (entries.length !== 1 || !entries[0].isDirectory()) return dir;
     dir = path.join(dir, entries[0].name);
   }
@@ -502,6 +515,8 @@ export class Imports {
     )
       throw new Error("Runtime must match the pack manifest");
     const java = await javaFor(runtime.version);
+    if (![8, 11, 16, 17, 21, 25].includes(java))
+      throw new Error(`Java ${java} is not supported by this panel image`);
     if (
       ["FABRIC", "FORGE", "NEOFORGE", "QUILT"].includes(runtime.type) &&
       !runtime.loaderVersion

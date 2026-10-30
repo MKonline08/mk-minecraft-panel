@@ -217,6 +217,95 @@ test("download checks and streamed limits reject invalid content", async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("all supported manifest loaders preserve exact versions, and ambiguous loaders fail", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mk-loaders-")),
+    store = new Store(root),
+    imports = new Imports(store);
+  try {
+    for (const [loader, version, type] of [
+      ["fabric-loader", "0.16.10", "FABRIC"],
+      ["quilt-loader", "0.29.2", "QUILT"],
+      ["forge", "47.3.0", "FORGE"],
+      ["neoforge", "21.1.80", "NEOFORGE"],
+    ]) {
+      const manifest = {
+        formatVersion: 1,
+        game: "minecraft",
+        name: "Fixture",
+        versionId: "1",
+        dependencies: { minecraft: "1.21.1", [loader]: version },
+        files: [],
+      };
+      const r = await imports.inspect(
+        "a",
+        "modpack",
+        Readable.from(
+          await archive({ "modrinth.index.json": JSON.stringify(manifest) }),
+        ),
+        "pack.mrpack",
+      );
+      assert.equal(r.runtime?.type, type);
+      assert.equal(r.runtime?.loaderVersion, version);
+    }
+    await assert.rejects(
+      imports.inspect(
+        "a",
+        "modpack",
+        Readable.from(
+          await archive({
+            "modrinth.index.json": JSON.stringify({
+              formatVersion: 1,
+              game: "minecraft",
+              files: [],
+              dependencies: { minecraft: "1.21.1", forge: "1", neoforge: "2" },
+            }),
+          }),
+        ),
+        "bad.mrpack",
+      ),
+      /ambiguous/,
+    );
+  } finally {
+    store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("interrupted import blocks startup and rolls back the journaled installation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mk-recovery-")),
+    store = new Store(root),
+    engine = new Engine(root, root),
+    s = server();
+  store.save(s);
+  await engine.configure(s);
+  const previous = `staging/${s.id}-previous-test`;
+  await fs.mkdir(path.dirname(path.join(root, previous)), { recursive: true });
+  await fs.rename(engine.dir(s), path.join(root, previous));
+  await fs.mkdir(engine.dir(s));
+  await fs.writeFile(path.join(engine.dir(s), "partial"), "incomplete");
+  store.set(
+    `rollback:${s.id}`,
+    JSON.stringify({ previous, server: s, stage: "old-moved" }),
+  );
+  const jobs = new Jobs(store, engine);
+  jobs.close();
+  engine.stop = async () => {};
+  engine.container = async () => null as any;
+  try {
+    assert.equal(store.server(s.id).recoveryRequired, true);
+    await assert.rejects(
+      engine.start(store.server(s.id), () => {}),
+      /recovery/,
+    );
+    await rollbackImport(jobs, store.server(s.id), () => {});
+    await fs.access(path.join(engine.dir(s), "server.properties"));
+    assert.equal(store.server(s.id).recoveryRequired, undefined);
+  } finally {
+    store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 test("world import honors custom names, preserves dimensions, creates backup and supports rollback", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "mk-world-import-")),
     store = new Store(root),

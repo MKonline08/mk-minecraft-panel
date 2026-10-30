@@ -189,14 +189,17 @@ export class Engine {
       `UID=${process.getuid?.() ?? 0}`,
       `GID=${process.getgid?.() ?? 0}`,
     ];
-    if (s.loaderVersion) {
+    const loaderVersion =
+      s.loaderVersion ||
+      (s.type === "QUILT" && s.version === "1.21.1" ? "0.29.2" : undefined);
+    if (loaderVersion) {
       const key = {
         FABRIC: "FABRIC_LOADER_VERSION",
         QUILT: "QUILT_LOADER_VERSION",
         FORGE: "FORGE_VERSION",
         NEOFORGE: "NEOFORGE_VERSION",
       }[s.type as string];
-      if (key) env.push(`${key}=${s.loaderVersion}`);
+      if (key) env.push(`${key}=${loaderVersion}`);
     }
     c = await this.docker.createContainer({
       name: "mk-" + s.id,
