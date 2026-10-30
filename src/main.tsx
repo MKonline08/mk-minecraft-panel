@@ -1,5 +1,5 @@
 import { RepairPanel } from "./repairs.js";
-import { ImportPanel, TrashPanel } from "./imports.js";
+import { ImportPanel, TrashPanel, uploadArchive } from "./imports.js";
 import { api, send, useLoad } from "./api.js";
 import { Console, Backups } from "./backup-console.js";
 import React, { useState, useEffect, useCallback } from "react";
@@ -317,6 +317,10 @@ function App() {
   const [section, setSection] = useState("Dashboard");
   const [tab, setTab] = useState("Overview");
   const [creating, setCreating] = useState(false);
+  const [newPack, setNewPack] = useState<{
+    serverId: string;
+    record: any;
+  } | null>(null);
   const [deleting, setDeleting] = useState<S | null>(null);
   const [mobile, setMobile] = useState(false);
   const [query, setQuery] = useState("");
@@ -466,7 +470,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.5.1</span>
+            MK PANEL <span>v1.5.2</span>
           </small>
         </div>
       </aside>
@@ -560,6 +564,8 @@ function App() {
                 act={act}
                 working={working || activeJobs.some((j) => j.serverId === s.id)}
                 requesting={working}
+                initialPack={newPack?.serverId === s.id ? newPack.record : null}
+                clearInitialPack={() => setNewPack(null)}
                 notify={notify}
                 onDelete={() => setDeleting(s)}
                 refreshMs={refreshMs}
@@ -795,7 +801,8 @@ function App() {
         <CreateModal
           defaults={workspace.data}
           onClose={() => setCreating(false)}
-          onCreated={async (id, modpack) => {
+          onCreated={async (id, modpack, record) => {
+            setNewPack(record ? { serverId: id, record } : null);
             setCreating(false);
             await servers.reload();
             await jobs.reload();
@@ -946,7 +953,7 @@ function CreateModal({
 }: {
   defaults: any;
   onClose: () => void;
-  onCreated: (id: string, modpack?: boolean) => void;
+  onCreated: (id: string, modpack?: boolean, record?: any) => void;
 }) {
   const [step, setStep] = useState(0);
   const [b, setB] = useState({
@@ -960,6 +967,7 @@ function CreateModal({
     autoStart: true,
   });
   const [forPack, setForPack] = useState(false);
+  const [packFile, setPackFile] = useState<File | null>(null);
   const [world, setWorld] = useState<File | null>(null);
   const [project, setProject] = useState("");
   const [error, setError] = useState("");
@@ -990,7 +998,14 @@ function CreateModal({
       const r = await send("/servers", { ...b, autoStart: false });
       const id = r.server.id;
       setCreatedId(id);
-      if (world) {
+      let packRecord = null;
+      if (forPack && packFile)
+        packRecord = await uploadArchive(
+          `/servers/${id}/imports?kind=modpack`,
+          packFile,
+          setProgress,
+        );
+      if (!forPack && world) {
         setProgress("Uploading your world…");
         const f = new FormData();
         f.append("file", world);
@@ -998,7 +1013,7 @@ function CreateModal({
           await api(`/servers/${id}/world`, { method: "POST", body: f }),
         );
       }
-      if (project.trim())
+      if (!forPack && project.trim())
         await wait(
           await send(`/servers/${id}/mods/install`, {
             project: project.trim(),
@@ -1006,7 +1021,7 @@ function CreateModal({
         );
       if (b.autoStart && !forPack)
         await send(`/servers/${id}/actions`, { action: "start" });
-      onCreated(id, forPack);
+      onCreated(id, forPack, packRecord);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1048,6 +1063,23 @@ function CreateModal({
           />{" "}
           Set up for a modpack (create stopped, then browse or upload a pack)
         </label>
+        {forPack && (
+          <label>
+            Upload a modpack when creating this server (optional)
+            <input
+              type="file"
+              aria-label="Modpack archive for new server"
+              accept=".mrpack,.zip"
+              disabled={busy}
+              onChange={(e) => setPackFile(e.target.files?.[0] || null)}
+            />
+            <small>
+              Choose a Modrinth .mrpack, CurseForge export, or complete
+              server-pack ZIP. After creation, review the pack before installing
+              it.
+            </small>
+          </label>
+        )}
         <div className="steps">
           {["Basics", "Software", "World & mods", "Review"].map((s, i) => (
             <div key={s} className={step >= i ? "done" : ""}>
@@ -1134,8 +1166,16 @@ function CreateModal({
         )}
         {step === 2 && (
           <>
+            {forPack && (
+              <Notice>
+                The server will be created stopped. The pack determines the
+                runtime after review; world and single-mod options are
+                unavailable for this setup.
+              </Notice>
+            )}
             <Field label="World seed (optional)">
               <input
+                disabled={forPack}
                 value={b.seed}
                 onChange={(e) => update("seed", e.target.value)}
                 placeholder="Leave blank for a fresh random world"
@@ -1148,6 +1188,7 @@ function CreateModal({
               <input
                 type="file"
                 accept=".zip"
+                disabled={forPack}
                 onChange={(e) => setWorld(e.target.files?.[0] || null)}
               />
             </Field>
@@ -1157,6 +1198,7 @@ function CreateModal({
                 hint="Required dependencies are resolved automatically. More mods can be added from the server page."
               >
                 <input
+                  disabled={forPack}
                   value={project}
                   onChange={(e) => setProject(e.target.value)}
                   placeholder="e.g. fabric-api"
@@ -1173,17 +1215,24 @@ function CreateModal({
                 {pretty(b.type)} · Minecraft {b.version} · {b.memory} GB RAM
               </p>
               <p>
-                {world ? world.name : "New generated world"}
+                {forPack
+                  ? packFile?.name || "Choose a modpack after creation"
+                  : world
+                    ? world.name
+                    : "New generated world"}
                 {project && ` · ${project}`}
               </p>
             </div>
             <label className="check">
               <input
                 type="checkbox"
-                checked={b.autoStart}
+                checked={b.autoStart && !forPack}
+                disabled={forPack}
                 onChange={(e) => update("autoStart", e.target.checked)}
               />{" "}
-              Start automatically after setup
+              {forPack
+                ? "Start after confirming the modpack installation"
+                : "Start automatically after setup"}
             </label>
             <label className="check">
               <input
@@ -1225,7 +1274,10 @@ function CreateModal({
             </button>
           )}
           {createdId && !busy ? (
-            <button className="primary" onClick={() => onCreated(createdId)}>
+            <button
+              className="primary"
+              onClick={() => onCreated(createdId, forPack)}
+            >
               Open created server
             </button>
           ) : step < 3 ? (
@@ -1262,6 +1314,8 @@ function CreateModal({
   );
 }
 type PageProps = {
+  initialPack?: any;
+  clearInitialPack?: () => void;
   requesting?: boolean;
   s: S;
   tab: string;
@@ -1278,7 +1332,15 @@ function ServerPage(p: PageProps) {
   if (tab === "Console") return <Console {...p} />;
   if (tab === "Appearance") return <Appearance {...p} />;
   if (tab === "Settings") return <ServerSettings {...p} />;
-  if (tab === "Modpacks") return <ImportPanel {...p} kind="modpack" />;
+  if (tab === "Modpacks")
+    return (
+      <ImportPanel
+        {...p}
+        initialRecord={p.initialPack}
+        clearInitialRecord={p.clearInitialPack}
+        kind="modpack"
+      />
+    );
   if (tab === "World") return <ImportPanel {...p} kind="world" />;
   if (tab === "Mods/Plugins") return <Mods {...p} />;
   if (tab === "Files") return <Files {...p} />;

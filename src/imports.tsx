@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api, send, useLoad } from "./api.js";
 
 type Props = {
@@ -30,13 +30,15 @@ export function uploadArchive(
       );
     request.onabort = () => reject(new Error("Upload cancelled"));
     request.onload = () => {
+      let result;
       try {
-        const result = JSON.parse(request.responseText);
-        if (request.status >= 200 && request.status < 300) resolve(result);
-        else reject(new Error(result.error || "Upload failed"));
+        result = JSON.parse(request.responseText);
       } catch {
         reject(new Error("Invalid upload response"));
+        return;
       }
+      if (request.status >= 200 && request.status < 300) resolve(result);
+      else reject(new Error(result.error || "Upload failed"));
     };
     const data = new FormData();
     data.append("file", file);
@@ -48,16 +50,22 @@ export function ImportPanel({
   act,
   working,
   kind,
-}: Props & { kind: "world" | "backup" | "modpack" }) {
+  initialRecord,
+  clearInitialRecord,
+}: Props & {
+  kind: "world" | "backup" | "modpack";
+  initialRecord?: any;
+  clearInitialRecord?: () => void;
+}) {
   const [apiKey, setApiKey] = useState("");
   const provider = useLoad<any>(() => api("/modpack-settings"), [s.id]);
   const base = `/servers/${s.id}`;
-  const [record, setRecord] = useState<any>(null),
+  const [record, setRecord] = useState<any>(initialRecord || null),
     [progress, setProgress] = useState("");
   const [runtime, setRuntime] = useState({
-    type: "FABRIC",
-    version: s.version,
-    loaderVersion: "",
+    type: initialRecord?.runtime?.type || "FABRIC",
+    version: initialRecord?.runtime?.version || s.version,
+    loaderVersion: initialRecord?.runtime?.loaderVersion || "",
   });
   const [world, setWorld] = useState(""),
     [keep, setKeep] = useState(false),
@@ -66,6 +74,9 @@ export function ImportPanel({
     [hits, setHits] = useState<any[]>([]),
     [versions, setVersions] = useState<any[]>([]);
   const [uploaded, setUploaded] = useState<string[]>([]);
+  useEffect(() => {
+    if (initialRecord) clearInitialRecord?.();
+  }, []);
   const recovery = useLoad<any>(
     () => api(base + "/import-recovery"),
     [s.id],
@@ -391,41 +402,86 @@ export function ImportPanel({
                     {f.path}
                   </label>
                 ))}
-              {record.files
-                .filter((f: any) => !f.urls.length || !f.optional)
-                .map((f: any) => (
-                  <label className="list-row" key={f.path}>
-                    {uploaded.includes(f.path)
-                      ? "Verified upload: "
-                      : f.urls.length
-                        ? "Manual replacement (if download fails): "
-                        : "Missing file: "}
-                    {f.path}
-                    <input
-                      type="file"
-                      disabled={busy}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        try {
-                          const r = await act(
-                            () =>
-                              uploadArchive(
-                                base +
-                                  `/imports/${record.id}/file?path=${encodeURIComponent(f.path)}`,
-                                file,
-                                setProgress,
-                              ),
-                            "File verified",
-                          );
-                          if (r) setUploaded([...uploaded, f.path]);
-                        } finally {
-                          setProgress("");
-                        }
-                      }}
-                    />
-                  </label>
+              {[
+                {
+                  title: "Required files needing manual upload",
+                  files: record.files.filter(
+                    (f: any) =>
+                      !f.urls.length &&
+                      (!f.optional || optional.includes(f.path)),
+                  ),
+                  open: true,
+                },
+                {
+                  title: "Manual replacement for downloadable files (optional)",
+                  files: record.files.filter(
+                    (f: any) =>
+                      f.urls.length &&
+                      (!f.optional || optional.includes(f.path)),
+                  ),
+                  open: false,
+                },
+              ]
+                .filter((group) => group.files.length > 0)
+                .map((group) => (
+                  <details
+                    key={group.title}
+                    open={group.open || undefined}
+                    className="import-review"
+                  >
+                    <summary>
+                      {group.title} · {group.files.length}
+                    </summary>
+                    {group.files.map((f: any) => (
+                      <label className="list-row" key={f.path}>
+                        {uploaded.includes(f.path)
+                          ? "Verified upload: "
+                          : f.urls.length
+                            ? "Optional replacement: "
+                            : "Missing file: "}
+                        {f.path}
+                        <input
+                          type="file"
+                          disabled={busy}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            try {
+                              const r = await act(
+                                () =>
+                                  uploadArchive(
+                                    base +
+                                      `/imports/${record.id}/file?path=${encodeURIComponent(f.path)}`,
+                                    file,
+                                    setProgress,
+                                  ),
+                                "File verified",
+                              );
+                              if (r)
+                                setUploaded((items) => [
+                                  ...items.filter((x) => x !== f.path),
+                                  f.path,
+                                ]);
+                            } finally {
+                              setProgress("");
+                            }
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </details>
                 ))}
+              {record.files.some(
+                (f: any) =>
+                  (!f.optional || optional.includes(f.path)) &&
+                  !f.urls.length &&
+                  !uploaded.includes(f.path),
+              ) && (
+                <p role="alert" className="notice">
+                  Upload all selected missing files above before confirming.
+                  Downloadable files do not need a manual upload.
+                </p>
+              )}
             </>
           )}
           <p>
@@ -443,7 +499,9 @@ export function ImportPanel({
                 busy ||
                 record.files.some(
                   (f: any) =>
-                    !f.optional && !f.urls.length && !uploaded.includes(f.path),
+                    (!f.optional || optional.includes(f.path)) &&
+                    !f.urls.length &&
+                    !uploaded.includes(f.path),
                 )
               }
               onClick={async () => {
