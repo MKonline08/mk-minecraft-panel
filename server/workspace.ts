@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { Store } from "./store.js";
 import { noSymlinks, contentFolder, type Server } from "./core.js";
+import { worldName } from "./imports.js";
 import { inspectJar } from "./mods.js";
 
 export const workspaceSchema = z.object({
@@ -72,7 +73,12 @@ export class Storage {
     const serverDir = await noSymlinks(this.root, `servers/${s.id}`);
     const backupDir = await noSymlinks(this.root, `backups/${s.id}`);
     const worlds = [];
-    for (const name of ["world", "world_nether", "world_the_end"]) {
+    const configuredWorld = await worldName(serverDir);
+    for (const name of [
+      configuredWorld,
+      configuredWorld + "_nether",
+      configuredWorld + "_the_end",
+    ]) {
       const dir = await noSymlinks(this.root, `servers/${s.id}/${name}`);
       if (
         await fs
@@ -89,6 +95,9 @@ export class Storage {
         .catch(() => null),
       serverBytes: await directoryBytes(serverDir),
       backupBytes: await directoryBytes(backupDir),
+      trashBytes: await directoryBytes(
+        await noSymlinks(this.root, `trash/${s.id}`),
+      ),
       worlds,
       updatedAt: new Date().toISOString(),
     };

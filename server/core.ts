@@ -34,6 +34,15 @@ export const settingsSchema = z.object({
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export type Server = {
+  loaderVersion?: string;
+  pack?: {
+    name: string;
+    version?: string;
+    format: string;
+    status: "installed" | "verified" | "failed";
+    log?: string;
+  };
+  recoveryRequired?: boolean;
   id: string;
   name: string;
   type: ServerType;

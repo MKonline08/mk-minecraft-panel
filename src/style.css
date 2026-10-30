@@ -1829,3 +1829,64 @@ dd {
 .command-responses {
   max-height: 180px;
 }
+
+.file-select-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.file-select-row > input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.file-select-row .file-row {
+  flex: 1;
+  min-width: 0;
+}
+.import-review,
+.trash-panel {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid var(--border, #38414c);
+  border-radius: 12px;
+}
+.import-panel label {
+  display: block;
+  margin: 12px 0;
+}
+.import-panel input[type="checkbox"] {
+  width: auto;
+  margin-right: 8px;
+}
+.import-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow: auto;
+}
+.pack-results {
+  max-height: 340px;
+  overflow: auto;
+}
+.pack-results .list-row {
+  align-items: flex-start;
+}
+.pack-results .list-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.trash-panel code {
+  overflow-wrap: anywhere;
+}
+.import-review .form-grid label {
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .trash-panel .list-row {
+    flex-wrap: wrap;
+  }
+  .import-panel .button-row {
+    flex-wrap: wrap;
+  }
+}

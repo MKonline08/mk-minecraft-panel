@@ -19,6 +19,8 @@ import { z } from "zod";
 import { Store } from "./store.js";
 import { Engine, IMAGE_RELEASE } from "./docker.js";
 import { Jobs } from "./jobs.js";
+import { importRoutes } from "./import-routes.js";
+import { Imports } from "./imports.js";
 import {
   createSchema,
   defaults,
@@ -165,7 +167,7 @@ export async function createApp(
     username: z.string().trim().min(3).max(40),
     password: z.string().min(12).max(200),
   });
-  app.get("/api/health", async () => ({ ok: true, version: "1.3.0" }));
+  app.get("/api/health", async () => ({ ok: true, version: "1.4.0" }));
   app.get("/api/auth/status", async (req) => {
     const token = req.cookies.mk_session;
     const row = token
@@ -446,6 +448,7 @@ export async function createApp(
     if (!["stopped", "failed"].includes(state.status))
       throw new Error("Stop the server before changing its files or settings");
   };
+  importRoutes(app, jobs, target, idle);
   app.delete("/api/servers/:id", async (req) => {
     const s = target(req);
     const { name } = z.object({ name: z.string() }).parse(req.body);
@@ -846,6 +849,28 @@ export async function createApp(
     if (!name.endsWith(".zip")) throw new Error("Invalid backup");
     const file = await noSymlinks(root, `backups/${s.id}/${name}`);
     await fs.access(file);
+    const imported = store.get(`backup-import:${s.id}:${name}`);
+    if (imported) {
+      const imports = new Imports(store);
+      const saved = JSON.parse(imported);
+      let record;
+      jobs.fileMutations.add(s.id);
+      try {
+        record = await imports.inspect(
+          s.id,
+          "backup",
+          createReadStream(file),
+          name,
+        );
+      } finally {
+        jobs.fileMutations.delete(s.id);
+      }
+      return jobs.enqueue(s.id, "import", {
+        importId: record.id,
+        runtime: saved.runtime,
+        confirm: true,
+      });
+    }
     return jobs.enqueue(s.id, "restore", { file });
   });
   app.get("/api/servers/:id/backup/:name", async (req, reply) => {
