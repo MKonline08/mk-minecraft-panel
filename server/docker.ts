@@ -151,6 +151,22 @@ export class Engine {
       });
     }
   }
+  async reconfigureVoice(s: Server, port?: number) {
+    if (s.voicePort === port) return;
+    const c = await this.container(s);
+    if (c && (await c.inspect()).State.Running)
+      throw new Error("Stop the server before changing its voice chat port");
+    if (port) {
+      const all = await this.docker.listContainers({ all: true });
+      if (
+        all.some((other) =>
+          other.Ports?.some((p) => p.Type === "udp" && p.PublicPort === port),
+        )
+      )
+        throw new Error(`UDP port ${port} is already in use`);
+    }
+    if (c) await c.remove();
+  }
   async start(s: Server, progress: (msg: string) => void) {
     if (s.recoveryRequired)
       throw new Error(
@@ -208,10 +224,18 @@ export class Engine {
       Image: s.image,
       Labels: { [LABEL]: s.id },
       Env: env,
-      ExposedPorts: { "25565/tcp": {} },
+      ExposedPorts: {
+        "25565/tcp": {},
+        ...(s.voicePort ? { "24454/udp": {} } : {}),
+      },
       HostConfig: {
         Binds: [`${this.hostRoot.replace(/\/$/, "")}/servers/${s.id}:/data`],
-        PortBindings: { "25565/tcp": [{ HostPort: String(s.port) }] },
+        PortBindings: {
+          "25565/tcp": [{ HostPort: String(s.port) }],
+          ...(s.voicePort
+            ? { "24454/udp": [{ HostPort: String(s.voicePort) }] }
+            : {}),
+        },
         Memory: (s.memory * 1024 + 768) * 1024 * 1024,
         RestartPolicy: { Name: "unless-stopped" },
         LogConfig: {

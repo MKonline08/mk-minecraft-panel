@@ -34,6 +34,7 @@ export const settingsSchema = z.object({
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export type Server = {
+  voicePort?: number;
   loaderVersion?: string;
   pack?: {
     name: string;

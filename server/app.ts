@@ -535,13 +535,31 @@ export async function createApp(
     const s = target(req);
     await stopped(s);
     const values = settingsSchema
-      .extend({ memory: z.number().int().min(1).max(64).optional() })
+      .extend({
+        memory: z.number().int().min(1).max(64).optional(),
+        voicePort: z.number().int().min(1024).max(65535).nullable().optional(),
+      })
       .parse(req.body);
     return fileMutation(s, async () => {
       const memory = values.memory ?? s.memory;
+      const voicePort =
+        values.voicePort === undefined
+          ? s.voicePort
+          : (values.voicePort ?? undefined);
+      if (
+        voicePort &&
+        store
+          .servers()
+          .some((other) => other.id !== s.id && other.voicePort === voicePort)
+      )
+        throw new Error(
+          "That voice chat UDP port is assigned to another server",
+        );
       const previous = properties(s);
+      await engine.reconfigureVoice(s, voicePort);
       await engine.reconfigureMemory(s, memory);
       s.memory = memory;
+      s.voicePort = voicePort;
       s.settings = settingsSchema.parse(values);
       store.save(s);
       const next = properties(s);
