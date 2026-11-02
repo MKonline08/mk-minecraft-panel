@@ -127,6 +127,32 @@ test("API authentication, origin protection, settings, image processing and file
     assert.equal(r.statusCode, 200, r.body);
     assert.equal(removedContainer, true);
     assert.equal(store.server(s.id).memory, 2);
+    engine.docker.listContainers = async () => [];
+    r = await app.inject({
+      method: "PUT",
+      url: "/api/servers/test-server/settings",
+      headers,
+      payload: { ...defaults, voicePort: 24454 },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(store.server(s.id).voicePort, 24454);
+    store.save({ ...store.server(s.id), id: "other-server", voicePort: 24455 });
+    r = await app.inject({
+      method: "PUT",
+      url: "/api/servers/test-server/settings",
+      headers,
+      payload: { ...defaults, voicePort: 24455 },
+    });
+    assert.equal(r.statusCode, 400, r.body);
+    assert.equal(store.server(s.id).voicePort, 24454);
+    r = await app.inject({
+      method: "PUT",
+      url: "/api/servers/test-server/settings",
+      headers,
+      payload: { ...defaults, voicePort: null },
+    });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.equal(store.server(s.id).voicePort, undefined);
     assert.equal(
       await fs.readFile(path.join(engine.dir(s), "world-marker.txt"), "utf8"),
       "keep this world",

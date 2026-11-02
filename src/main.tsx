@@ -60,6 +60,7 @@ type S = {
   memoryLimit: number;
   cpu: number;
   port: number;
+  voicePort?: number;
   java: number;
   motd: string;
   banner: boolean;
@@ -470,7 +471,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.5.2</span>
+            MK PANEL <span>v1.5.3</span>
           </small>
         </div>
       </aside>
@@ -1462,6 +1463,9 @@ function ServerPage(p: PageProps) {
 function ServerSettings({ s, act, working, onDelete }: PageProps) {
   const [v, setV] = useState(s.settings);
   const [memory, setMemory] = useState(s.memoryLimit);
+  const [voicePort, setVoicePort] = useState(
+    s.voicePort ? String(s.voicePort) : "",
+  );
   return (
     <div>
       <form
@@ -1469,11 +1473,28 @@ function ServerSettings({ s, act, working, onDelete }: PageProps) {
         onSubmit={(e) => {
           e.preventDefault();
           void act(() =>
-            send("/servers/" + s.id + "/settings", { ...v, memory }, "PUT"),
+            send(
+              "/servers/" + s.id + "/settings",
+              { ...v, memory, voicePort: voicePort ? Number(voicePort) : null },
+              "PUT",
+            ),
           );
         }}
       >
         <h2>Gameplay settings</h2>
+        <Field
+          label="Voice chat host UDP port"
+          hint="Leave blank to disable. Use 24454 for your first server and a different port for each additional server. Keep Simple Voice Chat's internal port at 24454. Point Playit's UDP tunnel to your CasaOS IP and this host port; set voice_host to its public address and port. Restart Minecraft after saving. Players also need the voice chat mod."
+        >
+          <input
+            type="number"
+            min="1024"
+            max="65535"
+            placeholder="Disabled (example: 24454)"
+            value={voicePort}
+            onChange={(e) => setVoicePort(e.target.value)}
+          />
+        </Field>
         <p className="muted">
           Stop the server before saving. Changes take effect on its next start.
         </p>
