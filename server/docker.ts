@@ -24,9 +24,13 @@ export class Engine {
     public root: string,
     public hostRoot: string,
   ) {
-    this.docker = new Docker({
-      socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock",
-    });
+    // DOCKER_HOST (e.g. tcp://docker-proxy:2375) lets the panel talk to a
+    // filtering socket proxy instead of mounting the raw Docker socket.
+    this.docker = process.env.DOCKER_HOST
+      ? new Docker()
+      : new Docker({
+          socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock",
+        });
   }
   dir(s: Server) {
     return safePath(this.root, `servers/${s.id}`);

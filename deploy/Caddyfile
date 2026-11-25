@@ -1,0 +1,25 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$PANEL_DOMAIN} {
+	encode zstd gzip
+
+	# Large world / modpack uploads stream straight through.
+	request_body {
+		max_size 8GB
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	reverse_proxy mk-panel:8080 {
+		# Long-running uploads and downloads
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+}
