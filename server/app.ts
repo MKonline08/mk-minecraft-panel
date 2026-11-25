@@ -85,7 +85,11 @@ function trustProxySetting() {
   const value = process.env.TRUST_PROXY?.trim();
   if (!value || value === "false" || value === "0") return false;
   if (value === "true") return true;
-  if (/^\d+$/.test(value)) return Number(value);
+  if (/^\d+$/.test(value)) {
+    // Trust the nearest N proxies (Fastify 5.12 types no longer take a number).
+    const hops = Number(value);
+    return (_address: string, hop: number) => hop < hops;
+  }
   return value; // comma-separated proxy IPs/CIDRs
 }
 export async function createApp(
