@@ -93,6 +93,24 @@ For friends outside your home, forward **only each intended Minecraft TCP game p
 
 The panel manages Docker through its socket, which is powerful host-level access. Use only trusted admins, mods, and plugins, and keep the web UI on a trusted LAN or private VPN. CasaOS login does not replace the panel's own login. For a TLS reverse proxy, set `SECURE_COOKIE=true`; do not enable it for plain HTTP LAN access.
 
+## Running on a public domain (HTTPS)
+
+Use `deploy/docker-compose.domain.yml` instead of the LAN compose file when the panel is reachable from the internet:
+
+```sh
+cp deploy/.env.example deploy/.env   # set PANEL_DOMAIN and SETUP_TOKEN
+docker compose -f deploy/docker-compose.domain.yml --env-file deploy/.env up -d
+```
+
+- **Caddy** gets a free TLS certificate and is the only thing exposed (ports 80/443). The panel port is not published.
+- **SETUP_TOKEN** must be entered on the first-run screen, so nobody else can claim the administrator account before you do.
+- **docker-socket-proxy** gives the panel only the container, image and exec APIs instead of the raw Docker socket.
+- `TRUST_PROXY=1` makes login rate limits use real visitor IPs; cookies become `Secure` and HSTS is sent automatically over HTTPS.
+
+Panel environment variables: `TRUST_PROXY` (`true`, a hop count, or proxy IPs/CIDRs), `SETUP_TOKEN`, `SECURE_COOKIE`, `DOCKER_HOST` (e.g. `tcp://docker-proxy:2375`).
+
+Even with these protections, the panel can create containers, which is root-level power on the host: use a long unique password, and if possible put the panel behind a VPN or an access gate (Cloudflare Access, Tailscale, Authelia) as well.
+
 ## Development and verification
 
 Requires Node.js 24 and npm. For live Minecraft integration tests, use Linux with Docker running.

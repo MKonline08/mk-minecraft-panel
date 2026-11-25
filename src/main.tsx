@@ -43,6 +43,8 @@ import {
   Trash2,
 } from "lucide-react";
 import "./style.css";
+import "./theme.css";
+import { installEffects } from "./effects.js";
 import {
   PlayerRoster,
   ServerResources,
@@ -240,7 +242,15 @@ function Motd({ text }: { text: string }) {
     </span>
   );
 }
-function Auth({ setup, onDone }: { setup: boolean; onDone: () => void }) {
+function Auth({
+  setup,
+  tokenRequired,
+  onDone,
+}: {
+  setup: boolean;
+  tokenRequired?: boolean;
+  onDone: () => void;
+}) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   return (
@@ -295,6 +305,19 @@ function Auth({ setup, onDone }: { setup: boolean; onDone: () => void }) {
               required
             />
           </Field>
+          {setup && tokenRequired && (
+            <Field
+              label="Setup token"
+              hint="The SETUP_TOKEN value from your server's environment."
+            >
+              <input
+                name="setupToken"
+                type="password"
+                autoComplete="one-time-code"
+                required
+              />
+            </Field>
+          )}
           {error && <Notice error>{error}</Notice>}
           <button className="primary wide" disabled={busy}>
             {busy ? (
@@ -391,7 +414,13 @@ function App() {
       </div>
     );
   if (!auth.data.authenticated)
-    return <Auth setup={auth.data.setup} onDone={auth.reload} />;
+    return (
+      <Auth
+        setup={auth.data.setup}
+        tokenRequired={!!auth.data.setupTokenRequired}
+        onDone={auth.reload}
+      />
+    );
   const s = servers.data?.find((s) => s.id === selected);
   const activeJobs = (jobs.data || []).filter((j) =>
     ["queued", "running"].includes(j.status),
@@ -2492,4 +2521,5 @@ function Mods({ s, act, working }: PageProps) {
     </div>
   );
 }
+installEffects();
 createRoot(document.getElementById("root")!).render(<App />);

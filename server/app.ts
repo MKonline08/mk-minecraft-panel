@@ -10,10 +10,11 @@ import { pipeline } from "node:stream/promises";
 import {
   randomBytes,
   randomUUID,
-  scryptSync,
+  scrypt,
   timingSafeEqual,
   createHash,
 } from "node:crypto";
+import { promisify } from "node:util";
 import sharp from "sharp";
 import { z } from "zod";
 import { Store } from "./store.js";
@@ -53,6 +54,44 @@ import {
 } from "./backup-settings.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+const scryptAsync = promisify(scrypt) as (
+  password: string,
+  salt: string,
+  length: number,
+) => Promise<Buffer>;
+// Async scrypt keeps login attempts from blocking every other request.
+const derive = (password: string, salt: string) =>
+  scryptAsync(password, salt, 64);
+async function passwordRecord(password: string) {
+  const salt = randomBytes(16).toString("hex");
+  return salt + ":" + (await derive(password, salt)).toString("hex");
+}
+async function passwordMatches(password: string, saved: string | undefined) {
+  const [salt, digest] = (saved || "").split(":");
+  if (!salt || !digest) return false;
+  const expected = Buffer.from(digest, "hex");
+  const actual = await derive(password, salt);
+  return (
+    expected.length === actual.length && timingSafeEqual(actual, expected)
+  );
+}
+// Constant-time comparison for short secrets of any length.
+const sameText = (a: string, b: string) =>
+  timingSafeEqual(
+    createHash("sha256").update(a).digest(),
+    createHash("sha256").update(b).digest(),
+  );
+function trustProxySetting() {
+  const value = process.env.TRUST_PROXY?.trim();
+  if (!value || value === "false" || value === "0") return false;
+  if (value === "true") return true;
+  if (/^\d+$/.test(value)) {
+    // Trust the nearest N proxies (Fastify 5.12 types no longer take a number).
+    const hops = Number(value);
+    return (_address: string, hop: number) => hop < hops;
+  }
+  return value; // comma-separated proxy IPs/CIDRs
+}
 export async function createApp(
   options: { root?: string; engine?: Engine; scheduling?: boolean } = {},
 ) {
@@ -80,7 +119,9 @@ export async function createApp(
   const app = Fastify({
     logger: process.env.NODE_ENV !== "test",
     bodyLimit: 2 * 1024 * 1024,
-    trustProxy: false,
+    // Behind a reverse proxy, set TRUST_PROXY so rate limits see real client IPs
+    // and HTTPS is detected for secure cookies and HSTS.
+    trustProxy: trustProxySetting(),
   });
   await app.register(cookie);
   await app.register(rateLimit, { max: 500, timeWindow: "1 minute" });
@@ -114,8 +155,19 @@ export async function createApp(
     reply.header("X-Frame-Options", "DENY");
     reply.header(
       "Content-Security-Policy",
-      "default-src 'self'; img-src 'self' data: https://cdn.modrinth.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+      "default-src 'self'; img-src 'self' data: https://cdn.modrinth.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
     );
+    reply.header(
+      "Permissions-Policy",
+      "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    );
+    reply.header("Cross-Origin-Opener-Policy", "same-origin");
+    reply.header("Cross-Origin-Resource-Policy", "same-origin");
+    if (req.protocol === "https")
+      reply.header(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains",
+      );
     const route = req.routeOptions.url || req.url.split("?")[0];
     if (!route.startsWith("/api/")) return;
     reply.header("Cache-Control", "no-store");
@@ -158,7 +210,9 @@ export async function createApp(
     reply.setCookie("mk_session", token, {
       httpOnly: true,
       sameSite: "strict",
-      secure: process.env.SECURE_COOKIE === "true",
+      secure:
+        process.env.SECURE_COOKIE === "true" ||
+        reply.request?.protocol === "https",
       path: "/",
       maxAge: 7 * 86400,
     });
@@ -175,8 +229,10 @@ export async function createApp(
           .prepare("SELECT expires FROM sessions WHERE id=?")
           .get(hash(token)) as any)
       : null;
+    const setup = !store.get("password");
     return {
-      setup: !store.get("password"),
+      setup,
+      setupTokenRequired: setup && !!process.env.SETUP_TOKEN,
       authenticated: !!row && row.expires > Date.now(),
     };
   });
@@ -186,12 +242,21 @@ export async function createApp(
     async (req, reply) => {
       if (store.get("password"))
         throw new Error("Administrator already exists");
-      const b = credentials.parse(req.body);
-      const salt = randomBytes(16).toString("hex");
-      store.set(
-        "password",
-        salt + ":" + scryptSync(b.password, salt, 64).toString("hex"),
-      );
+      const b = credentials
+        .extend({ setupToken: z.string().max(200).optional() })
+        .parse(req.body);
+      // On a public domain, SETUP_TOKEN stops strangers from claiming the
+      // first administrator account before you do.
+      const required = process.env.SETUP_TOKEN;
+      if (required && !sameText(b.setupToken || "", required))
+        throw Object.assign(new Error("Setup token is incorrect"), {
+          statusCode: 403,
+        });
+      const record = await passwordRecord(b.password);
+      // Re-check after the async hash so two setup requests cannot both win.
+      if (store.get("password"))
+        throw new Error("Administrator already exists");
+      store.set("password", record);
       store.set("username", b.username);
       session(reply);
       return { ok: true };
@@ -204,12 +269,8 @@ export async function createApp(
       const b = credentials.parse(req.body);
       const saved = store.get("password");
       if (!saved) throw new Error("Create your administrator account first");
-      const [salt, digest] = saved.split(":");
-      const valid = timingSafeEqual(
-        scryptSync(b.password, salt, 64),
-        Buffer.from(digest, "hex"),
-      );
-      if (!valid || b.username !== store.get("username"))
+      const valid = await passwordMatches(b.password, saved);
+      if (!valid || !sameText(b.username, store.get("username") || ""))
         throw Object.assign(new Error("Incorrect username or password"), {
           statusCode: 401,
         });
@@ -245,21 +306,9 @@ export async function createApp(
           password: credentials.shape.password.optional(),
         })
         .parse(req.body);
-      const [salt, digest] = store.get("password")!.split(":");
-      if (
-        !timingSafeEqual(
-          scryptSync(b.currentPassword, salt, 64),
-          Buffer.from(digest, "hex"),
-        )
-      )
+      if (!(await passwordMatches(b.currentPassword, store.get("password"))))
         throw new Error("Current password is incorrect");
-      if (b.password) {
-        const nextSalt = randomBytes(16).toString("hex");
-        store.set(
-          "password",
-          nextSalt + ":" + scryptSync(b.password, nextSalt, 64).toString("hex"),
-        );
-      }
+      if (b.password) store.set("password", await passwordRecord(b.password));
       store.set("username", b.username);
       store.db.prepare("DELETE FROM sessions").run();
       session(reply);
@@ -905,7 +954,10 @@ export async function createApp(
     const name = safeName((req.params as any).name);
     if (!name.endsWith(".zip")) throw new Error("Invalid backup");
     return reply
-      .header("Content-Disposition", `attachment; filename="${name}"`)
+      .header(
+        "Content-Disposition",
+        "attachment; filename*=UTF-8''" + encodeURIComponent(name),
+      )
       .type("application/zip")
       .send(
         createReadStream(await noSymlinks(root, `backups/${s.id}/${name}`)),

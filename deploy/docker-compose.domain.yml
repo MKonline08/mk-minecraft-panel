@@ -1,0 +1,92 @@
+# MK Minecraft Panel — public domain deployment with automatic HTTPS.
+#
+#   cp deploy/.env.example deploy/.env   # then edit it
+#   docker compose -f deploy/docker-compose.domain.yml --env-file deploy/.env up -d
+#
+# What this adds over the LAN compose file:
+#   * Caddy terminates TLS (free Let's Encrypt certs) — the panel itself is
+#     never published to the internet, only ports 80/443 on Caddy are.
+#   * docker-socket-proxy: the panel no longer gets the raw Docker socket,
+#     only the container/image/exec API it needs (no volumes, networks,
+#     swarm, secrets, plugins, system prune...).
+#   * SETUP_TOKEN: nobody can claim the first admin account without it.
+#   * TRUST_PROXY + HTTPS detection: real client IPs for login rate limits,
+#     Secure cookies and HSTS.
+name: mk-minecraft-panel
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:?Set PANEL_DOMAIN in deploy/.env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    depends_on: [mk-panel]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+
+  mk-panel:
+    image: ghcr.io/mkonline08/mk-minecraft-panel:${PANEL_VERSION:-latest}
+    # build: ..   # uncomment to build from this checkout instead
+    restart: unless-stopped
+    # No "ports:" on purpose — only Caddy can reach the panel.
+    environment:
+      DATA_DIR: /data
+      HOST_DATA_DIR: ${HOST_DATA_DIR:-/DATA/AppData/mk-minecraft-panel}
+      DOCKER_HOST: tcp://docker-proxy:2375
+      TRUST_PROXY: "1"
+      SECURE_COOKIE: "true"
+      SETUP_TOKEN: ${SETUP_TOKEN:?Set SETUP_TOKEN in deploy/.env (openssl rand -hex 24)}
+      CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
+    volumes:
+      - type: bind
+        source: ${HOST_DATA_DIR:-/DATA/AppData/mk-minecraft-panel}
+        target: /data
+    networks: [edge, docker-api]
+    depends_on: [docker-proxy]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      EXEC: 1
+      INFO: 1
+      POST: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      # Everything else (volumes, networks, swarm, secrets, plugins, build,
+      # system, auth...) stays denied.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-api]
+    read_only: true
+    tmpfs: [/run]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  edge: {}
+  docker-api:
+    internal: true # the Docker API proxy is unreachable from outside
+
+volumes:
+  caddy-data: {}
+  caddy-config: {}
