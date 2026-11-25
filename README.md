@@ -10,7 +10,7 @@ Create independent Vanilla, Paper, Spigot, Purpur, Fabric, Forge, NeoForge, and 
 
 ## Installation on CasaOS
 
-Version 1.4.0 adds recoverable file deletion, staged world/backup uploads, and modpack installation. See [the v1.4.0 guide](docs/v1.4.0.md). Version 1.3.0 added in-game backup warnings, configurable announcements, daily/weekly schedules with timezones, verified backups and restart recovery, plus an incremental console with noise controls. Existing installations retain their servers and data. Read the [v1.3.0 release and upgrade guide](docs/v1.3.0.md) before updating.
+Version 1.6.0 hardens the panel for public domains (setup token, reverse-proxy and HTTPS support, Docker socket proxy) and adds an animated interface. See [the v1.6.0 notes](docs/v1.6.0.md). Version 1.4.0 adds recoverable file deletion, staged world/backup uploads, and modpack installation. See [the v1.4.0 guide](docs/v1.4.0.md). Version 1.3.0 added in-game backup warnings, configurable announcements, daily/weekly schedules with timezones, verified backups and restart recovery, plus an incremental console with noise controls. Existing installations retain their servers and data. Read the [v1.3.0 release and upgrade guide](docs/v1.3.0.md) before updating.
 
 **Remove** remains available beside installed mods and plugins. Stop Minecraft, open **Mods/Plugins → Installed files**, choose Remove and confirm the filename and server. Only that JAR is deleted; plugin settings, accounts, worlds and other data folders stay. Disabled JARs can also be removed. Other plugins may depend on the removed plugin.
 
