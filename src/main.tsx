@@ -500,7 +500,7 @@ function App() {
             <LogOut size={17} /> Sign out
           </button>
           <small>
-            MK PANEL <span>v1.5.3</span>
+            MK PANEL <span>v1.6.0</span>
           </small>
         </div>
       </aside>
